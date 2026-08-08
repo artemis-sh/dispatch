@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { readBoolean, readNumber } from "../../src/util.js";
+import { readBoolean, readNonnegativeInteger, readNumber } from "../../src/util.js";
 
 // ---------------------------------------------------------------------------
 // readBoolean
@@ -80,5 +80,27 @@ describe("readNumber", () => {
 
   it("throws for the string 'NaN'", () => {
     expect(() => readNumber("NaN", 0)).toThrow(/Expected numeric env value/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readNonnegativeInteger
+// ---------------------------------------------------------------------------
+
+describe("readNonnegativeInteger", () => {
+  it("returns the fallback when value is unset", () => {
+    expect(readNonnegativeInteger(undefined, 30)).toBe(30);
+    expect(readNonnegativeInteger("", 30)).toBe(30);
+  });
+
+  it("accepts zero and positive safe integers", () => {
+    expect(readNonnegativeInteger("0", 30)).toBe(0);
+    expect(readNonnegativeInteger("30", 0)).toBe(30);
+  });
+
+  it("rejects negative, fractional, non-finite, and unsafe values", () => {
+    for (const value of ["-1", "1.5", "Infinity", "NaN", "9007199254740992"]) {
+      expect(() => readNonnegativeInteger(value, 30)).toThrow(/Expected nonnegative integer env value/);
+    }
   });
 });
