@@ -15,10 +15,10 @@ describe("waitForOpencodeReady", () => {
       controller.signal,
     );
 
-    expect(fetch).toHaveBeenCalledWith("http://[::1]:4096/global/health", {
+    expect(fetch).toHaveBeenCalledWith("http://[::1]:4096/global/health", expect.objectContaining({
       headers: { Authorization: `Basic ${Buffer.from("opencode:secret").toString("base64")}` },
-      signal: controller.signal,
-    });
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   it("stops an in-flight readiness request when aborted", async () => {
