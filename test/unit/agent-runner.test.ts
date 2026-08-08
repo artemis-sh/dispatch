@@ -54,6 +54,28 @@ describe("runExecutionAttempt", () => {
     ]);
   });
 
+  it("bounds externally supplied tool names in diagnostics", async () => {
+    const diagnostics: unknown[] = [];
+    const toolName = `github_${"x".repeat(200)}😀`;
+    const client = fakeClient([
+      toolEvent("session-1", toolName),
+      sessionEvent("session.idle", "session-1"),
+    ]);
+
+    await runExecutionAttempt({
+      agent: "coder",
+      endpoint,
+      onDiagnostic: async (diagnostic) => { diagnostics.push(diagnostic); },
+      prompt: "do work",
+      title: "attempt",
+    }, client);
+
+    const toolDiagnostic = diagnostics.find((diagnostic) => (diagnostic as { lastToolName?: string }).lastToolName !== undefined) as { lastToolName: string; toolCallCount: number };
+    expect(Buffer.byteLength(toolDiagnostic.lastToolName)).toBe(128);
+    expect(toolDiagnostic.lastToolName).toBe(toolName.slice(0, 128));
+    expect(toolDiagnostic.toolCallCount).toBe(1);
+  });
+
   it("does not split a multi-byte character at the output limit", async () => {
     const client = fakeClient([
       textEvent("session-1", "a😀b"),
@@ -311,6 +333,15 @@ function textEvent(sessionID: string, delta: string): Event {
     properties: {
       delta,
       part: { type: "text", id: "part-1", messageID: "message-1", sessionID, text: delta },
+    },
+  } as Event;
+}
+
+function toolEvent(sessionID: string, tool: string): Event {
+  return {
+    type: "message.part.updated",
+    properties: {
+      part: { type: "tool", id: "part-1", messageID: "message-1", sessionID, tool },
     },
   } as Event;
 }

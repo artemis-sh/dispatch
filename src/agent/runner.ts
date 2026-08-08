@@ -5,6 +5,7 @@ import type { ExecutionAttemptDiagnostic } from "../execution/types.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
+const MAX_DIAGNOSTIC_TOOL_NAME_BYTES = 128;
 
 export type ExecutionAttemptInput = {
   abortSessionOnSignal?: (reason: unknown) => boolean;
@@ -213,7 +214,7 @@ export async function runExecutionAttempt(
       const eventType = diagnosticEventType(event, sessionId);
       if (eventType?.toolName) {
         toolCallCount += 1;
-        lastToolName = eventType.toolName;
+        lastToolName = appendWithinByteLimit(eventType.toolName, MAX_DIAGNOSTIC_TOOL_NAME_BYTES);
       }
       if (eventType?.type && eventType.type !== lastDiagnosticEvent) {
         lastDiagnosticEvent = eventType.type;
