@@ -103,6 +103,12 @@ describe("loadConfig", () => {
     });
   });
 
+  it("does not allow repository schedule processing without revision resolution", () => {
+    expect(() => loadConfig({
+      DISPATCH_SCHEDULE_WORKER_ENABLED: "true",
+    })).toThrow(/revision resolver/i);
+  });
+
   it("requires dispatcher renewal before lease expiry", () => {
     expect(() => loadConfig({
       DISPATCH_DISPATCHER_LEASE_DURATION_MS: "1000",
