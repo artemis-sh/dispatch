@@ -72,6 +72,7 @@ export const createBindingDefinitionSchema = z
     prompt: promptSchema,
     workspace: bindingWorkspaceSchema,
     afterTurn: afterTurnSchema.optional(),
+    requireGitHubPullRequestEffect: z.boolean().optional(),
     activeSingleton: activeSingletonSchema.optional(),
     checkpoint: checkpointSchema.optional(),
   })
@@ -79,6 +80,9 @@ export const createBindingDefinitionSchema = z
   .superRefine((value, context) => {
     if (value.checkpoint && value.afterTurn) {
       context.addIssue({ code: "custom", message: "checkpoint bindings must be one-shot", path: ["checkpoint"] });
+    }
+    if (value.requireGitHubPullRequestEffect && !value.afterTurn) {
+      context.addIssue({ code: "custom", message: "GitHub pull request effect requirement needs an afterTurn wait", path: ["requireGitHubPullRequestEffect"] });
     }
   });
 

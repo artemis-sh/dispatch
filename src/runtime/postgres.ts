@@ -487,7 +487,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             schemaVersion: definition.schemaVersion,
             ...("disposition" in definition
               ? { disposition: definition.disposition, wake: definition.wake }
-             : { workspace: definition.workspace, prompt: definition.prompt, afterTurn: definition.afterTurn, activeSingleton: definition.activeSingleton, checkpoint: definition.checkpoint }),
+              : { workspace: definition.workspace, prompt: definition.prompt, afterTurn: definition.afterTurn, activeSingleton: definition.activeSingleton, checkpoint: definition.checkpoint, requireGitHubPullRequestEffect: definition.requireGitHubPullRequestEffect }),
           }), definition.eventTypes, publishedAt],
       });
       if (inserted.rowCount !== 1) throw new BindingVersionAlreadyExistsError(binding.bindingId, binding.version);
@@ -2317,6 +2317,27 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         }
       }
 
+      if (binding.definition.requireGitHubPullRequestEffect && executionState === "WAITING") {
+        const effect = await client.query<{ state: string }>(`SELECT state FROM dispatch_github_pull_request_effects
+          WHERE tenant_id = $1 AND execution_id = $2 FOR UPDATE`, [command.tenantId, command.executionId]);
+        if (effect.rowCount !== 1) {
+          await client.query(`UPDATE dispatch_execution_attempts SET state = 'FAILED', finished_at = $6,
+            lease_owner = NULL, lease_expires_at = NULL WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+            AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'`,
+          [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, now]);
+          await client.query(`UPDATE dispatch_executions SET state = 'FAILED', result = $3::jsonb, completed_at = $4,
+            updated_at = $4 WHERE id = $1 AND tenant_id = $2 AND state = 'RUNNING'`,
+          [command.executionId, command.tenantId, JSON.stringify({ error: "MISSING_REQUIRED_GITHUB_PR_EFFECT" }), now]);
+          await client.query(`INSERT INTO dispatch_execution_transitions
+            (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+            VALUES ($1,$2,$3,$4,(SELECT COALESCE(MAX(sequence),0)+1 FROM dispatch_execution_transitions WHERE tenant_id=$2 AND execution_id=$3),
+              'RUNNING','FAILED',$5,'MISSING_REQUIRED_GITHUB_PR_EFFECT',$6)`,
+          [randomUUID(), command.tenantId, command.executionId, command.attempt, command.actor, now]);
+          await client.query("COMMIT");
+          return { applied: true, attemptState: "FAILED", executionState: "FAILED" } as CompleteLeasedExecutionTurnResult;
+        }
+      }
+
       if (executionState === "QUEUED" && pending) {
         const currentSequence = (await client.query<{ current_input_sequence: number }>(
           "SELECT current_input_sequence FROM dispatch_executions WHERE id=$1 AND tenant_id=$2",
@@ -2777,7 +2798,7 @@ function bindingFromRow(row: BindingRow): PublishedBindingVersion {
     eventTypes: row.event_types,
     ...(persisted.disposition === "wake"
       ? { disposition: persisted.disposition, wake: persisted.wake }
-      : { activeSingleton: persisted.activeSingleton, afterTurn: persisted.afterTurn, checkpoint: persisted.checkpoint, prompt: persisted.prompt, workspace: persisted.workspace }),
+      : { activeSingleton: persisted.activeSingleton, afterTurn: persisted.afterTurn, checkpoint: persisted.checkpoint, prompt: persisted.prompt, requireGitHubPullRequestEffect: persisted.requireGitHubPullRequestEffect, workspace: persisted.workspace }),
   });
   return {
     bindingId: row.binding_id,

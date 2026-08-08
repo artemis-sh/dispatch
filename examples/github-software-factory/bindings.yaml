@@ -47,6 +47,7 @@ definition:
   activeSingleton:
     name: developer-issue
     key: [/repository/id, /issue/number]
+  requireGitHubPullRequestEffect: true
   prompt: { literal: Implement the issue and open a pull request., includeEvent: data }
   workspace:
     type: git
