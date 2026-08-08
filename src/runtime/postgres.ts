@@ -2327,7 +2327,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, now]);
           await client.query(`UPDATE dispatch_executions SET state = 'FAILED', result = $3::jsonb, completed_at = $4,
             updated_at = $4 WHERE id = $1 AND tenant_id = $2 AND state = 'RUNNING'`,
-          [command.executionId, command.tenantId, JSON.stringify({ error: "MISSING_REQUIRED_GITHUB_PR_EFFECT" }), now]);
+          [command.executionId, command.tenantId, JSON.stringify({ error: "MISSING_REQUIRED_GITHUB_PR_EFFECT", output: command.result }), now]);
           await client.query(`INSERT INTO dispatch_execution_transitions
             (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
             VALUES ($1,$2,$3,$4,(SELECT COALESCE(MAX(sequence),0)+1 FROM dispatch_execution_transitions WHERE tenant_id=$2 AND execution_id=$3),

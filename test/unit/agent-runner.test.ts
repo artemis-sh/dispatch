@@ -48,6 +48,8 @@ describe("runExecutionAttempt", () => {
       { phase: "session_created", eventCount: 0 },
       { phase: "subscribed", eventCount: 0 },
       { phase: "prompt_submitted", eventCount: 0 },
+      { phase: "prompt_submitted", eventCount: 1, lastEventType: "message.text", lastEventAt: expect.any(String) },
+      { phase: "prompt_submitted", eventCount: 2, lastEventType: "session.idle", lastEventAt: expect.any(String) },
       { phase: "idle", eventCount: 2, lastEventType: "session.idle", lastEventAt: expect.any(String) },
     ]);
   });
