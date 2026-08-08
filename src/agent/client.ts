@@ -44,7 +44,14 @@ export async function waitForOpencodeReady(
   while (Date.now() <= deadline) {
     signal?.throwIfAborted();
     try {
-      const response = await fetch(url, { headers: authHeaders(endpoint.password), signal });
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      // A Pod can accept a TCP connection before OpenCode is ready to answer it.
+      // Bound each probe so one half-open request cannot consume the whole attempt.
+      const response = await fetch(url, {
+        headers: authHeaders(endpoint.password),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(Math.min(2_000, remainingMs))]) : AbortSignal.timeout(Math.min(2_000, remainingMs)),
+      });
       if (response.ok) return;
     } catch (error) {
       signal?.throwIfAborted();

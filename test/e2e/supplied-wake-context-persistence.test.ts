@@ -49,6 +49,36 @@ describe("supplied wake context persistence", () => {
     expect(claimed.executionId).toBe(executionId);
   });
 
+  it("fails a PR lifecycle turn without a registered effect instead of creating a pending-context wait", async () => {
+    const executionId = await createDeveloper({ requireGitHubPullRequestEffect: true });
+    const claimed = await runDeveloperToCompletion(executionId);
+
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "FAILED", result: { error: "MISSING_REQUIRED_GITHUB_PR_EFFECT" } });
+    expect((await pool.query("select state from dispatch_execution_attempts where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "FAILED" });
+    expect((await pool.query("select count(*)::int as count from dispatch_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select reason from dispatch_execution_transitions where execution_id=$1 order by sequence desc limit 1", [executionId])).rows[0]).toEqual({ reason: "MISSING_REQUIRED_GITHUB_PR_EFFECT" });
+    expect(claimed.executionId).toBe(executionId);
+  });
+
+  it("allows a registered effect to await later signed PR confirmation", async () => {
+    const executionId = await createDeveloper({ requireGitHubPullRequestEffect: true });
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: `registered-effect-${randomUUID()}`, leaseDurationMs: 60_000 });
+    if (!claimed || claimed.executionId !== executionId) throw new Error("Expected developer claim");
+    await store.transitionLeasedExecution({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
+      expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING", fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId: "default" });
+    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: claimed.lease.fencingToken,
+      headRef: "dispatch/issue-7", pullRequestTitle: "Fix issue 7", registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo",
+      repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "Fix issue 7", head: "dispatch/issue-7", base: "main" }), tenantId: "default" });
+    await store.completeLeasedExecutionTurn({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
+      fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner, reason: "done", result: null, tenantId: "default" });
+
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
+    expect((await pool.query("select state from dispatch_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "PENDING_CONTEXT" });
+    await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
+    await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
+  });
+
   it("reconciles a review offer admitted before the PR slot is bound", async () => {
     const executionId = await createDeveloper();
     await publishReviewBinding();
@@ -93,6 +123,7 @@ describe("supplied wake context persistence", () => {
     expect((await pool.query("select state from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "CONFIRMED" });
     expect((await pool.query("select correlation from dispatch_execution_wake_contexts where execution_id=$1", [executionId])).rows[0]).toEqual({ correlation: { repositoryId: 7, pullRequestNumber: 61 } });
     await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
+    await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
   });
 
   it("recovers a registered effect from its exact signed PR event", async () => {
@@ -109,9 +140,10 @@ describe("supplied wake context persistence", () => {
     expect((await pool.query("select state,pull_request_number from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "CONFIRMED", pull_request_number: 70 });
     expect((await pool.query("select correlation from dispatch_execution_wake_contexts where execution_id=$1", [executionId])).rows[0].correlation.pullRequestNumber).toBe(70);
     await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
+    await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
   });
 
-  async function createDeveloper(): Promise<string> {
+  async function createDeveloper(options: { requireGitHubPullRequestEffect?: boolean } = {}): Promise<string> {
     const id = randomUUID();
     await store.publishBindingVersion({
       bindingId: `developer-${id}`, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(), profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
@@ -121,6 +153,7 @@ describe("supplied wake context persistence", () => {
           { name: "repositoryId", source: "event", path: "/repository/id" },
           { name: "pullRequestNumber", source: "supplied", slot: "primaryPullRequestNumber" },
         ], deadlineSeconds: 600, admitWhileBusy: true } },
+        ...(options.requireGitHubPullRequestEffect ? { requireGitHubPullRequestEffect: true } : {}),
       },
     });
     return (await store.admitEvent(admissionCommand("work.start", { key: id, repository: { id: 7, fullName: "acme/repo" } }))).executions[0]!.id;

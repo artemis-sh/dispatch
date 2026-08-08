@@ -44,7 +44,7 @@ sandboxTemplates:
             - http
             - --listen-host=127.0.0.1
             - --port=8082
-            - --tools=issue_read,get_file_contents,search_code,get_commit,list_commits,create_branch,push_files,create_pull_request,pull_request_read,actions_list,actions_get,get_job_logs
+            - "--tools=issue_read,get_file_contents,search_code,get_commit,list_commits,create_branch,push_files,create_pull_request,pull_request_read,actions_list,actions_get,get_job_logs"
           securityContext: &restricted
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
@@ -98,7 +98,7 @@ sandboxTemplates:
             - http
             - --listen-host=127.0.0.1
             - --port=8082
-            - --tools=search_issues,issue_read,issue_write,pull_request_read,get_file_contents,search_code,get_commit,list_commits,actions_list,actions_get,get_job_logs
+            - "--tools=search_issues,issue_read,issue_write,pull_request_read,get_file_contents,search_code,get_commit,list_commits,actions_list,actions_get,get_job_logs"
         - <<: *developerBroker
           env:
             - { name: DISPATCH_GITHUB_TENANT, value: default }
@@ -118,7 +118,7 @@ sandboxTemplates:
             - http
             - --listen-host=127.0.0.1
             - --port=8082
-            - --tools=search_issues,issue_read,issue_write,add_issue_comment,get_label,list_label
+            - "--tools=search_issues,issue_read,issue_write,add_issue_comment,get_label,list_label"
         - <<: *developerBroker
           env:
             - { name: DISPATCH_GITHUB_TENANT, value: default }
@@ -137,7 +137,7 @@ sandboxTemplates:
             - http
             - --listen-host=127.0.0.1
             - --port=8082
-            - --tools=pull_request_read,get_file_contents,get_commit,pull_request_review_write,add_comment_to_pending_review,add_reply_to_pull_request_comment,actions_get,actions_list,get_job_logs
+            - "--tools=pull_request_read,get_file_contents,get_commit,pull_request_review_write,add_comment_to_pending_review,add_reply_to_pull_request_comment,actions_get,actions_list,get_job_logs"
         - <<: *developerBroker
           env:
             - { name: DISPATCH_GITHUB_TENANT, value: default }
@@ -162,7 +162,7 @@ sandboxTemplates:
             - http
             - --listen-host=127.0.0.1
             - --port=8082
-            - --tools=pull_request_read,merge_pull_request
+            - "--tools=pull_request_read,merge_pull_request"
         - <<: *developerBroker
           env:
             - { name: DISPATCH_GITHUB_TENANT, value: default }

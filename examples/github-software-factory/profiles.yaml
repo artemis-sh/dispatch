@@ -80,7 +80,9 @@ definition:
       permission: { "github_*": deny }
       agent:
         develop:
-          prompt: Implement the issue, verify the change, and open a pull request using GitHub MCP tools.
+          prompt: >-
+            Implement the issue, verify the change, and create the branch, push files, and open the pull request only through GitHub MCP tools.
+            Do not use local git credentials, gh, or a shell-based GitHub workflow. Do not report success until the GitHub MCP pull-request creation call succeeds.
           permission:
             github_issue_read: allow
             github_get_file_contents: allow

@@ -180,6 +180,8 @@ export const executionAttemptSchema = z
       updatedAt: z.string().datetime(),
       lastEventAt: z.string().datetime().optional(),
       lastEventType: z.string().max(128).optional(),
+      toolCallCount: z.number().int().nonnegative().optional(),
+      lastToolName: z.string().max(128).optional(),
       eventCount: z.number().int().nonnegative(),
       termination: z.enum(["deadline", "cancellation", "lease_lost", "error"]).optional(),
     }).strict().nullable(),

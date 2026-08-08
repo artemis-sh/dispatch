@@ -48,8 +48,32 @@ describe("runExecutionAttempt", () => {
       { phase: "session_created", eventCount: 0 },
       { phase: "subscribed", eventCount: 0 },
       { phase: "prompt_submitted", eventCount: 0 },
+      { phase: "prompt_submitted", eventCount: 1, lastEventType: "message.text", lastEventAt: expect.any(String) },
+      { phase: "prompt_submitted", eventCount: 2, lastEventType: "session.idle", lastEventAt: expect.any(String) },
       { phase: "idle", eventCount: 2, lastEventType: "session.idle", lastEventAt: expect.any(String) },
     ]);
+  });
+
+  it("bounds externally supplied tool names in diagnostics", async () => {
+    const diagnostics: unknown[] = [];
+    const toolName = `github_${"x".repeat(200)}😀`;
+    const client = fakeClient([
+      toolEvent("session-1", toolName),
+      sessionEvent("session.idle", "session-1"),
+    ]);
+
+    await runExecutionAttempt({
+      agent: "coder",
+      endpoint,
+      onDiagnostic: async (diagnostic) => { diagnostics.push(diagnostic); },
+      prompt: "do work",
+      title: "attempt",
+    }, client);
+
+    const toolDiagnostic = diagnostics.find((diagnostic) => (diagnostic as { lastToolName?: string }).lastToolName !== undefined) as { lastToolName: string; toolCallCount: number };
+    expect(Buffer.byteLength(toolDiagnostic.lastToolName)).toBe(128);
+    expect(toolDiagnostic.lastToolName).toBe(toolName.slice(0, 128));
+    expect(toolDiagnostic.toolCallCount).toBe(1);
   });
 
   it("does not split a multi-byte character at the output limit", async () => {
@@ -309,6 +333,15 @@ function textEvent(sessionID: string, delta: string): Event {
     properties: {
       delta,
       part: { type: "text", id: "part-1", messageID: "message-1", sessionID, text: delta },
+    },
+  } as Event;
+}
+
+function toolEvent(sessionID: string, tool: string): Event {
+  return {
+    type: "message.part.updated",
+    properties: {
+      part: { type: "tool", id: "part-1", messageID: "message-1", sessionID, tool },
     },
   } as Event;
 }

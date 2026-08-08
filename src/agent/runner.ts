@@ -5,6 +5,7 @@ import type { ExecutionAttemptDiagnostic } from "../execution/types.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
+const MAX_DIAGNOSTIC_TOOL_NAME_BYTES = 128;
 
 export type ExecutionAttemptInput = {
   abortSessionOnSignal?: (reason: unknown) => boolean;
@@ -148,8 +149,17 @@ export async function runExecutionAttempt(
   logger.info("opencode session created", { sessionId, title: input.title });
   await input.onSession?.(sessionId);
   let eventCount = 0;
+  let toolCallCount = 0;
+  let lastDiagnosticEvent: string | undefined;
+  let lastToolName: string | undefined;
   const checkpoint = (phase: "session_created" | "subscribed" | "prompt_submitted" | "idle" | "permission_requested" | "session_error", lastEventType?: string) =>
-    input.onDiagnostic?.({ phase, eventCount, ...(lastEventType ? { lastEventType, lastEventAt: new Date().toISOString() } : {}) });
+    input.onDiagnostic?.({
+      phase,
+      eventCount,
+      ...(lastEventType ? { lastEventType, lastEventAt: new Date().toISOString() } : {}),
+      ...(toolCallCount > 0 ? { toolCallCount } : {}),
+      ...(lastToolName ? { lastToolName } : {}),
+    });
   await checkpoint("session_created");
 
   let abortPromise: Promise<never> | undefined;
@@ -201,6 +211,15 @@ export async function runExecutionAttempt(
       const event = next.value;
       if (!isSessionEvent(event, sessionId)) continue;
       eventCount += 1;
+      const eventType = diagnosticEventType(event, sessionId);
+      if (eventType?.toolName) {
+        toolCallCount += 1;
+        lastToolName = appendWithinByteLimit(eventType.toolName, MAX_DIAGNOSTIC_TOOL_NAME_BYTES);
+      }
+      if (eventType?.type && eventType.type !== lastDiagnosticEvent) {
+        lastDiagnosticEvent = eventType.type;
+        await checkpoint("prompt_submitted", eventType.type);
+      }
 
       const delta = textDelta(event, sessionId);
       if (delta && outputBytes < maxOutputBytes) {
@@ -381,6 +400,18 @@ function textDelta(event: Event, sessionId: string): string | undefined {
       ? maybe.properties.delta
       : undefined;
   }
+}
+
+function diagnosticEventType(event: Event, sessionId: string): { type: string; toolName?: string } | undefined {
+  const maybe = event as unknown as { type: string; properties?: { sessionID?: string; status?: { type?: string }; part?: { sessionID?: string; type?: string; tool?: string } } };
+  if (maybe.type === "message.part.delta") return { type: "message.text" };
+  if (maybe.type === "message.part.updated") {
+    const part = maybe.properties?.part;
+    if (!part || part.sessionID !== sessionId || typeof part.type !== "string") return undefined;
+    return part.type === "tool" ? { type: "message.tool", ...(typeof part.tool === "string" ? { toolName: part.tool } : {}) } : { type: `message.${part.type}` };
+  }
+  if (maybe.type === "session.status") return { type: `session.${maybe.properties?.status?.type ?? "unknown"}` };
+  return { type: maybe.type };
 }
 
 function isSessionEvent(event: Event, sessionId: string): boolean {

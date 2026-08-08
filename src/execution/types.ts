@@ -84,6 +84,8 @@ export type ExecutionAttemptDiagnostic = {
   updatedAt: string;
   lastEventAt?: string;
   lastEventType?: string;
+  toolCallCount?: number;
+  lastToolName?: string;
   eventCount: number;
   termination?: "deadline" | "cancellation" | "lease_lost" | "error";
 };
