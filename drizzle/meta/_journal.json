@@ -113,6 +113,13 @@
       "when": 1786161000000,
       "tag": "0015_execution_attempt_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786200000000,
+      "tag": "0016_schedule_terminal_lease_clock",
+      "breakpoints": true
     }
   ]
 }
