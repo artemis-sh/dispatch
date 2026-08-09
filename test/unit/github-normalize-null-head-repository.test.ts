@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { normalizeGitHubEvent } from "../../src/connectors/github/normalize.js";
 
 const actor = (id: number, login: string) => ({ id, login, type: "User" });
