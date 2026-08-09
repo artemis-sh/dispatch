@@ -91,6 +91,76 @@ describe("revision resolution persistence", () => {
     expect((await store.admitEvent(command)).executions).toHaveLength(1);
     expect(await store.claimRevisionResolution({ leaseOwner: "resolver-2", leaseDurationMs: 60_000 })).toBeUndefined();
   });
+
+  it("rejects failure from a holder whose lease expired on the database clock", async () => {
+    const tenantId = "default";
+    const triggerId = `trigger-${randomUUID()}`;
+    const admittedAt = new Date().toISOString();
+    await store.createTrigger({
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
+      createdAt: admittedAt, disabledAt: null, enabled: true, id: triggerId, tenantId, type: "github.app.webhook",
+    });
+    await store.publishProfileVersion({
+      createdAt: admittedAt,
+      definition: {
+        schemaVersion: 1, runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } },
+        sandbox: { templateName: "opencode", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 3600,
+      },
+      id: randomUUID(), profileId: "developer", tenantId, version: 1,
+    });
+    await store.publishBindingVersion({
+      bindingId: "develop-issue", createdAt: admittedAt, disabledAt: null, enabled: true, id: randomUUID(),
+      tenantId, triggerId, version: 1, profile: { id: "developer", version: 1 },
+      definition: {
+        schemaVersion: 1, eventTypes: ["com.github.issues.opened"], filter: { all: [] },
+        prompt: { literal: "Develop", includeEvent: "data" },
+        workspace: {
+          type: "git", repository: { url: { path: "/repository/cloneUrl" } },
+          revision: { commit: { path: "/repository/defaultBranchRevision/commit" } },
+        },
+      },
+    });
+    const event = {
+      specversion: "1.0" as const,
+      id: randomUUID(), source: "https://github.com/acme/widgets", type: "com.github.issues.opened",
+      datacontenttype: "application/json",
+      data: {
+        schemaVersion: 1, installationId: 44,
+        repository: { id: 10, fullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", defaultBranch: "main", private: false },
+        issue: { number: 7 },
+      },
+    };
+    const eventId = randomUUID();
+    await store.admitEvent({
+      tenantId, triggerId, internalEventId: eventId, event, sourceDeduplicationKey: randomUUID(), admittedAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event } as JsonValue),
+      revisionResolution: {
+        provider: "github", installationId: 44, repositoryId: 10,
+        repositoryFullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", branch: "main",
+      },
+    });
+
+    const claim = await store.claimRevisionResolution({ leaseOwner: "resolver-1", leaseDurationMs: 60_000 });
+    expect(claim).toMatchObject({ eventId, tenantId });
+    const pool = store as unknown as { pool: { query(text: string, values: readonly unknown[]): Promise<unknown> } };
+    await pool.pool.query(
+      `UPDATE dispatch_event_revision_resolutions
+       SET lease_expires_at = clock_timestamp() - interval '1 second'
+       WHERE event_id = $1 AND tenant_id = $2`,
+      [eventId, tenantId],
+    );
+
+    const applied = await store.failRevisionResolution({
+      eventId, tenantId, leaseOwner: claim!.leaseOwner, leaseToken: claim!.leaseToken,
+      error: "late resolver failure",
+      failedAt: new Date(Date.now() - 120_000).toISOString(),
+      retryAt: new Date(Date.now() - 60_000).toISOString(),
+      maxAttempts: 1,
+    });
+
+    expect(applied).toBe(false);
+    expect(await store.claimRevisionResolution({ leaseOwner: "resolver-2", leaseDurationMs: 60_000 })).toMatchObject({ eventId, tenantId });
+  });
 });
 
 async function startPostgres(): Promise<StartedTestContainer> {
