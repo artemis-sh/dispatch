@@ -13,6 +13,7 @@ import { SandboxClaimExecutionAttemptProvisioner } from "./sandbox/provisioner.j
 import { GitHubAppRevisionResolver } from "./revision/github.js";
 import { RevisionResolutionWorker } from "./revision/worker.js";
 import { GitHubIssueAcknowledgmentTransport, GITHUB_ISSUE_REACTION_TOPIC } from "./connectors/github/issue-acknowledgment.js";
+import { disabledGitHubIssueAcknowledgmentTransport } from "./connectors/github/issue-acknowledgment-release.js";
 import { OutboxPublisher } from "./outbox/publisher.js";
 import { runOutboxPublisherLoop } from "./outbox/worker.js";
 import { ScheduleWorker } from "./schedule/worker.js";
@@ -62,7 +63,20 @@ const acknowledgmentTask = config.githubIssueAcknowledgmentEnabled
       idlePollMs: config.githubIssueAcknowledgmentIdlePollMs,
       signal: acknowledgmentController.signal,
     })
-  : Promise.resolve();
+  : runOutboxPublisherLoop({
+      publisher: new OutboxPublisher({
+        store: runtimeStore,
+        transport: disabledGitHubIssueAcknowledgmentTransport,
+        batchSize: 1,
+        leaseDurationMs: config.githubIssueAcknowledgmentLeaseDurationMs,
+        transportTimeoutMs: config.githubIssueAcknowledgmentRequestTimeoutMs,
+        baseRetryDelayMs: config.githubIssueAcknowledgmentRetryDelayMs,
+        maxRetryDelayMs: 5 * 60_000,
+        topics: [GITHUB_ISSUE_REACTION_TOPIC],
+      }),
+      idlePollMs: config.githubIssueAcknowledgmentIdlePollMs,
+      signal: acknowledgmentController.signal,
+    });
 const acknowledgment = acknowledgmentTask.catch((error: unknown) => {
   workerLoopFailures.inc({ component: "github-acknowledgment" });
   logger.error("GitHub issue acknowledgment worker stopped unexpectedly", { error });
