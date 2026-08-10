@@ -120,6 +120,13 @@
       "when": 1786170000000,
       "tag": "0016_revision_resolution_server_clock_fence",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786200000000,
+      "tag": "0017_schedule_terminal_lease_clock",
+      "breakpoints": true
     }
   ]
 }

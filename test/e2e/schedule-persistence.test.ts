@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import pg from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
@@ -62,5 +63,34 @@ describe("schedule persistence", () => {
     expect(await store.materializeDueScheduleOccurrences({ now: now.toISOString(), limit: 100 })).toBe(1);
     await store.disableTrigger("default", triggerId, new Date().toISOString());
     expect(await store.claimScheduleOccurrence({ leaseOwner: "scheduler-2", leaseDurationMs: 60_000 })).toBeUndefined();
+  });
+
+  it("does not finalize an expired occurrence lease with a skewed worker clock", async () => {
+    const now = new Date();
+    const triggerId = `expired-${randomUUID()}`;
+    await store.createTrigger({ id: triggerId, tenantId: "default", type: "schedule.cron", enabled: true,
+      createdAt: new Date(now.getTime() - 2 * 60_000).toISOString(), disabledAt: null,
+      config: { schemaVersion: 1, expression: "* * * * *", timezone: "UTC", misfirePolicy: "skip",
+        repository: { installationId: 44, id: 10, fullName: "acme/widgets", defaultBranch: "main" } } });
+    expect(await store.materializeDueScheduleOccurrences({ now: now.toISOString(), limit: 100 })).toBe(1);
+    const claimed = await store.claimScheduleOccurrence({ leaseOwner: "scheduler-3", leaseDurationMs: 60_000 });
+    expect(claimed).toBeDefined();
+
+    const pool = (store as unknown as { pool: pg.Pool }).pool;
+    await pool.query(`UPDATE dispatch_schedule_occurrences
+      SET lease_expires_at = clock_timestamp() - interval '1 second'
+      WHERE id = $1`, [claimed!.id]);
+    const historicalTimestamp = new Date(Date.now() - 120_000).toISOString();
+
+    expect(await store.completeScheduleOccurrence({
+      id: claimed!.id, leaseOwner: claimed!.leaseOwner, leaseToken: claimed!.leaseToken, completedAt: historicalTimestamp,
+    })).toBe(false);
+    expect((await pool.query<{ state: string }>("SELECT state FROM dispatch_schedule_occurrences WHERE id = $1", [claimed!.id])).rows[0]).toEqual({ state: "LEASED" });
+
+    expect(await store.failScheduleOccurrence({
+      id: claimed!.id, leaseOwner: claimed!.leaseOwner, leaseToken: claimed!.leaseToken, error: "late failure",
+      failedAt: historicalTimestamp, retryAt: new Date().toISOString(), maxAttempts: 5,
+    })).toBe(false);
+    expect((await pool.query<{ state: string }>("SELECT state FROM dispatch_schedule_occurrences WHERE id = $1", [claimed!.id])).rows[0]).toEqual({ state: "LEASED" });
   });
 });
