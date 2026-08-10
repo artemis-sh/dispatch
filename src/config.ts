@@ -86,6 +86,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     metricsPort: readPort(env.DISPATCH_METRICS_PORT, 9090, "DISPATCH_METRICS_PORT", true),
     sandboxClaimApiVersion: readSandboxClaimApiVersion(env.DISPATCH_SANDBOX_CLAIM_API_VERSION),
   };
+  if (config.port !== 0 && config.port === config.metricsPort) {
+    throw new Error("PORT and DISPATCH_METRICS_PORT must differ when both listeners use concrete ports");
+  }
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
     throw new Error("DISPATCH_DISPATCHER_RENEW_INTERVAL_MS must be less than DISPATCH_DISPATCHER_LEASE_DURATION_MS");
   }
