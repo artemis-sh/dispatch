@@ -2350,10 +2350,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           JSON.stringify(pending.input), JSON.stringify(pending.workspace), now]);
       }
 
-      await client.query(`UPDATE dispatch_execution_attempts SET state = 'SUCCEEDED', finished_at = $6,
+      const attemptState = executionState === "TIMED_OUT" ? "TIMED_OUT" : "SUCCEEDED";
+      await client.query(`UPDATE dispatch_execution_attempts SET state = $6::text, finished_at = $7,
         lease_owner = NULL, lease_expires_at = NULL WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
         AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'`,
-      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, now]);
+      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, attemptState, now]);
       await client.query(`UPDATE dispatch_executions SET state = $3::text, result = $4::jsonb, updated_at = $5::timestamptz,
         timeout_at = CASE
           WHEN $3::text = 'WAITING' THEN $6::timestamptz
@@ -2430,7 +2431,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           'RUNNING',$5,$6,$7,$8)`, [randomUUID(), command.tenantId, command.executionId, command.attempt, executionState, command.actor, command.reason, now]);
       await client.query("COMMIT");
       if (checkpointOutcome) checkpointAdvances.inc({ tenant: command.tenantId, binding_id: checkpointOutcome.bindingId, result: checkpointOutcome.result });
-      return { applied: true, attemptState: "SUCCEEDED", executionState, ...(executionState === "WAITING" && wait ? { eventWaitId: wait.id } : {}) };
+      return { applied: true, attemptState, executionState, ...(executionState === "WAITING" && wait ? { eventWaitId: wait.id } : {}) };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
