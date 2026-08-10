@@ -13,6 +13,7 @@ describe("schedule cron", () => {
     const after = new Date("2026-07-21T00:00:00Z");
     expect(nextCronOccurrence("0 0 */1 * 1", after).toISOString()).toBe("2026-07-27T00:00:00.000Z");
     expect(nextCronOccurrence("0 0 1-31 * 1", after).toISOString()).toBe("2026-07-27T00:00:00.000Z");
+    expect(nextCronOccurrence("0 0 1 * */1", after).toISOString()).toBe("2026-08-01T00:00:00.000Z");
     expect(nextCronOccurrence("0 0 1 * 0-6", after).toISOString()).toBe("2026-08-01T00:00:00.000Z");
   });
 

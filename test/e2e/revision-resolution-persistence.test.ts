@@ -48,6 +48,14 @@ describe("revision resolution persistence", () => {
         },
       },
     });
+    await store.publishBindingVersion({
+      bindingId: "notify-issue", createdAt: admittedAt, disabledAt: null, enabled: true, id: randomUUID(),
+      tenantId, triggerId, version: 1, profile: { id: "developer", version: 1 },
+      definition: {
+        schemaVersion: 1, eventTypes: ["com.github.issues.opened"], filter: { all: [] },
+        prompt: { literal: "Notify", includeEvent: "data" }, workspace: { type: "empty" },
+      },
+    });
     const event = {
       specversion: "1.0" as const,
       id: randomUUID(), source: "https://github.com/acme/widgets", type: "com.github.issues.opened",
@@ -69,8 +77,9 @@ describe("revision resolution persistence", () => {
     };
 
     const admitted = await store.admitEvent(command);
-    expect(admitted.executions).toEqual([]);
-    expect((await store.admitEvent(command))).toMatchObject({ replayed: true, executions: [] });
+    expect(admitted.executions).toMatchObject([{ binding: { id: "notify-issue" }, workspace: { type: "empty" }, state: "QUEUED" }]);
+    expect(admitted.executions).toHaveLength(1);
+    expect((await store.admitEvent(command))).toMatchObject({ replayed: true, executions: admitted.executions });
 
     const claim = await store.claimRevisionResolution({ leaseOwner: "resolver-1", leaseDurationMs: 60_000 });
     expect(claim).toMatchObject({ eventId: internalEventId, installationId: 44, repositoryId: 10, branch: "main", attempt: 1 });
@@ -83,13 +92,34 @@ describe("revision resolution persistence", () => {
       eventId: internalEventId, tenantId, leaseOwner: claim!.leaseOwner, leaseToken: claim!.leaseToken,
       commit: "a".repeat(40), resolvedAt: new Date().toISOString(),
     });
-    expect(completed?.executions).toHaveLength(1);
-    expect(completed?.executions[0]?.workspace).toEqual({
+    expect(completed?.executions).toEqual([expect.objectContaining({ binding: { id: "develop-issue" }, workspace: {
       type: "git", repository: { url: "https://github.com/acme/widgets.git" },
       revision: { type: "commit", commit: "a".repeat(40) },
-    });
-    expect((await store.admitEvent(command)).executions).toHaveLength(1);
+    } })]);
+    expect((await store.admitEvent(command)).executions).toHaveLength(2);
     expect(await store.claimRevisionResolution({ leaseOwner: "resolver-2", leaseDurationMs: 60_000 })).toBeUndefined();
+
+    const failedEvent = { ...event, id: randomUUID() };
+    const failedEventId = randomUUID();
+    const failedCommand = {
+      ...command,
+      internalEventId: failedEventId,
+      event: failedEvent,
+      sourceDeduplicationKey: randomUUID(),
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event: failedEvent } as JsonValue),
+    };
+    const failedAdmission = await store.admitEvent(failedCommand);
+    expect(failedAdmission.executions).toMatchObject([{ binding: { id: "notify-issue" }, workspace: { type: "empty" }, state: "QUEUED" }]);
+    expect(failedAdmission.executions).toHaveLength(1);
+    const failedClaim = await store.claimRevisionResolution({ leaseOwner: "resolver-3", leaseDurationMs: 60_000 });
+    expect(failedClaim?.eventId).toBe(failedEventId);
+    expect(await store.failRevisionResolution({
+      eventId: failedEventId, tenantId, leaseOwner: failedClaim!.leaseOwner, leaseToken: failedClaim!.leaseToken,
+      error: "GitHub unavailable", failedAt: new Date().toISOString(), retryAt: new Date().toISOString(), maxAttempts: 1,
+    })).toBe(true);
+    const replayedAfterFailure = await store.admitEvent(failedCommand);
+    expect(replayedAfterFailure.executions).toMatchObject([{ binding: { id: "notify-issue" }, workspace: { type: "empty" }, state: "QUEUED" }]);
+    expect(replayedAfterFailure.executions).toHaveLength(1);
   });
 
   it("rejects failure from a holder whose lease expired on the database clock", async () => {
