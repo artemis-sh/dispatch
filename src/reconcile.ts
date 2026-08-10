@@ -12,7 +12,7 @@
 import { createCustomObjectsApi } from "./sandbox/client.js";
 import type { SandboxClaim, SandboxClaimAPIVersion } from "./sandbox/types.js";
 import { logger, toErrCtx } from "./logger.js";
-import { readNumber } from "./util.js";
+import { readNonnegativeSafeInteger } from "./util.js";
 
 const GROUP = "extensions.agents.x-k8s.io";
 const PLURAL = "sandboxclaims";
@@ -71,6 +71,11 @@ export type ReconcileResult = {
  */
 export async function reconcileOnce(api: ReconcileApi, opts: ReconcileOpts): Promise<ReconcileResult> {
   const { namespace, apiVersion, graceMinutes, now } = opts;
+
+  if (!Number.isSafeInteger(graceMinutes) || graceMinutes < 0) {
+    throw new Error(`Expected graceMinutes to be a nonnegative safe integer, got ${graceMinutes}`);
+  }
+
   const graceMs = graceMinutes * 60 * 1_000;
 
   const log = logger.child({ namespace, apiVersion, graceMinutes });
@@ -147,7 +152,7 @@ export async function reconcileOnce(api: ReconcileApi, opts: ReconcileOpts): Pro
 async function reconcile(): Promise<void> {
   const namespace = process.env.DISPATCH_KUBE_NAMESPACE ?? process.env.POD_NAMESPACE ?? "agents";
   const apiVersion = readApiVersion(process.env.DISPATCH_SANDBOX_CLAIM_API_VERSION);
-  const graceMinutes = readNumber(process.env.DISPATCH_RECONCILER_GRACE_MINUTES, 30);
+  const graceMinutes = readNonnegativeSafeInteger(process.env.DISPATCH_RECONCILER_GRACE_MINUTES, 30);
 
   const api = createCustomObjectsApi();
   const result = await reconcileOnce(api, { namespace, apiVersion, graceMinutes, now: Date.now() });
