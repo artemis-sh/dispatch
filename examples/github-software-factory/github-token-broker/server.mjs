@@ -1,8 +1,11 @@
 import http from "node:http";
 import net from "node:net";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { resolve, relative, isAbsolute } from "node:path";
 
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_WORKSPACE_PUSH_BYTES = 2 * 1024 * 1024;
 const RESPONSE_HEADERS = ["content-type", "mcp-session-id", "retry-after"];
 
 async function readRequest(request) {
@@ -140,8 +143,142 @@ function createsIssue(body) {
   return message.params.arguments?.method === "create";
 }
 
+function issueMutationSubject(body) {
+  const call = rpcCall(body, "issue_write");
+  const args = call?.args;
+  if (!args || args.method === "create") return undefined;
+  const number = args.issue_number ?? args.issueNumber;
+  if (typeof args.owner !== "string" || typeof args.repo !== "string" || !Number.isSafeInteger(number) || number < 1) throw new Error("INVALID_ISSUE_MUTATION");
+  return `issue:${args.owner.toLowerCase()}/${args.repo.toLowerCase()}#${number}`;
+}
+
+function rpcCall(body, name) {
+  let message;
+  try { message = JSON.parse(body.toString("utf8")); } catch { return undefined; }
+  if (Array.isArray(message)) throw new Error("JSON_RPC_BATCH_NOT_SUPPORTED");
+  if (message?.method !== "tools/call" || message?.params?.name !== name) return undefined;
+  if (message.jsonrpc !== "2.0" || !(typeof message.id === "string" || typeof message.id === "number")) throw new Error("INVALID_TOOL_CALL");
+  return { args: message.params.arguments, id: message.id };
+}
+
+function toolsListCall(body) {
+  let message;
+  try { message = JSON.parse(body.toString("utf8")); } catch { return undefined; }
+  return message?.jsonrpc === "2.0" && message.method === "tools/list" ? message : undefined;
+}
+
 function mcpResult(id, value, isError = false) {
   return Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}) } }));
+}
+
+function rpcEnvelope(bytes) {
+  let text = bytes.toString("utf8");
+  if (text.trimStart().startsWith("event:") || text.trimStart().startsWith("data:")) {
+    const data = text.split(/\r?\n/).filter((line) => line.startsWith("data:"));
+    if (data.length !== 1) throw new Error("INVALID_MCP_RESULT");
+    text = data[0].slice(5).trim();
+  }
+  try { return JSON.parse(text); } catch { throw new Error("INVALID_MCP_RESULT"); }
+}
+
+const workspacePushTool = Object.freeze({
+  name: "push_workspace_files",
+  description: "Commit selected files from the current workspace to an existing GitHub branch. The branch must still point to the trusted workspace base commit.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["owner", "repo", "branch", "message", "paths"],
+    properties: {
+      owner: { type: "string", minLength: 1 },
+      repo: { type: "string", minLength: 1 },
+      branch: { type: "string", minLength: 1 },
+      message: { type: "string", minLength: 1, maxLength: 256 },
+      paths: { type: "array", minItems: 1, maxItems: 32, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 512 } },
+    },
+  },
+});
+const issueLifecyclesTool = Object.freeze({
+  name: "dispatch_issue_lifecycles",
+  description: "List the latest durable Dispatch developer lifecycle for each issue in this repository. Use this before recovering issue routing.",
+  inputSchema: { type: "object", additionalProperties: false, properties: {} },
+});
+const labelPullRequestTool = Object.freeze({
+  name: "label_pull_request_for_review",
+  description: "Apply the review routing label to one verified open pull request.",
+  inputSchema: {
+    type: "object", additionalProperties: false, required: ["owner", "repo", "pullNumber"],
+    properties: { owner: { type: "string", minLength: 1 }, repo: { type: "string", minLength: 1 }, pullNumber: { type: "integer", minimum: 1 } },
+  },
+});
+
+async function executeWorkspacePush(call, config, provider) {
+  if (!config.workspace || !config.permissions || config.permissions.contents !== "write") throw new Error("WORKSPACE_PUSH_UNAVAILABLE");
+  const args = call.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)
+    || typeof args.owner !== "string" || !/^[A-Za-z0-9-]{1,39}$/.test(args.owner)
+    || typeof args.repo !== "string" || !/^[A-Za-z0-9_.-]+$/.test(args.repo)
+    || typeof args.branch !== "string" || !/^(?!\/|.*(?:\.\.|\/\.|\.lock(?:\/|$)))[A-Za-z0-9._\/-]{1,255}$/.test(args.branch)
+    || typeof args.message !== "string" || args.message.length < 1 || args.message.length > 256
+    || !Array.isArray(args.paths) || args.paths.length < 1 || args.paths.length > 32 || new Set(args.paths).size !== args.paths.length) {
+    throw new Error("INVALID_WORKSPACE_PUSH");
+  }
+  const root = await realpath(config.workspace.directory);
+  const files = [];
+  let total = 0;
+  for (const path of args.paths) {
+    if (typeof path !== "string" || path.length > 512 || isAbsolute(path) || path.split("/").some((part) => part === "" || part === "." || part === "..")) throw new Error("INVALID_WORKSPACE_PATH");
+    const absolute = await realpath(resolve(root, path));
+    const within = relative(root, absolute);
+    if (within.startsWith("..") || isAbsolute(within) || (await stat(absolute)).isFile() !== true) throw new Error("INVALID_WORKSPACE_PATH");
+    const content = await readFile(absolute);
+    total += content.length;
+    if (total > MAX_WORKSPACE_PUSH_BYTES) throw new Error("WORKSPACE_PUSH_TOO_LARGE");
+    files.push({ path, content: content.toString("base64") });
+  }
+  const token = await provider.getToken();
+  const headers = { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "content-type": "application/json", "x-github-api-version": "2022-11-28" };
+  const api = `https://api.github.com/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}`;
+  const request = async (path, init = {}) => {
+    const response = await fetch(`${api}${path}`, { ...init, headers: { ...headers, ...(init.headers ?? {}) }, redirect: "manual" });
+    if (response.status === 401) provider.invalidate(token);
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error("GITHUB_WORKSPACE_PUSH_REJECTED");
+    return value;
+  };
+  const ref = await request(`/git/ref/heads/${args.branch.split("/").map(encodeURIComponent).join("/")}`);
+  if (ref.object?.type !== "commit" || ref.object.sha !== config.workspace.baseCommit) throw new Error("WORKSPACE_BRANCH_FENCE_MISMATCH");
+  const base = await request(`/git/commits/${config.workspace.baseCommit}`);
+  if (typeof base.tree?.sha !== "string") throw new Error("INVALID_BASE_COMMIT");
+  const entries = [];
+  for (const file of files) {
+    const blob = await request("/git/blobs", { method: "POST", body: JSON.stringify({ content: file.content, encoding: "base64" }) });
+    if (typeof blob.sha !== "string") throw new Error("INVALID_BLOB_RESULT");
+    entries.push({ path: file.path, mode: "100644", type: "blob", sha: blob.sha });
+  }
+  const tree = await request("/git/trees", { method: "POST", body: JSON.stringify({ base_tree: base.tree.sha, tree: entries }) });
+  const commit = await request("/git/commits", { method: "POST", body: JSON.stringify({ message: args.message, tree: tree.sha, parents: [config.workspace.baseCommit] }) });
+  await request(`/git/refs/heads/${args.branch.split("/").map(encodeURIComponent).join("/")}`, { method: "PATCH", body: JSON.stringify({ sha: commit.sha, force: false }) });
+  return { branch: args.branch, commit: commit.sha, paths: args.paths };
+}
+
+async function executePullRequestLabel(call, config, provider) {
+  const args = call.args;
+  if (!config.permissions || config.permissions.issues !== "write"
+    || !args || typeof args !== "object" || Array.isArray(args)
+    || typeof args.owner !== "string" || !/^[A-Za-z0-9-]{1,39}$/.test(args.owner)
+    || typeof args.repo !== "string" || !/^[A-Za-z0-9_.-]+$/.test(args.repo)
+    || !Number.isSafeInteger(args.pullNumber) || args.pullNumber < 1) throw new Error("INVALID_PULL_REQUEST_LABEL");
+  const token = await provider.getToken();
+  const headers = { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "content-type": "application/json", "x-github-api-version": "2022-11-28" };
+  const root = `https://api.github.com/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}`;
+  const pull = await fetch(`${root}/pulls/${args.pullNumber}`, { headers, redirect: "manual" });
+  if (pull.status === 401) provider.invalidate(token);
+  const identity = await pull.json().catch(() => ({}));
+  if (!pull.ok || identity.state !== "open" || identity.draft === true) throw new Error("PULL_REQUEST_NOT_REVIEWABLE");
+  const labeled = await fetch(`${root}/issues/${args.pullNumber}/labels`, { method: "POST", headers, redirect: "manual", body: JSON.stringify({ labels: ["review"] }) });
+  if (labeled.status === 401) provider.invalidate(token);
+  if (!labeled.ok) throw new Error("PULL_REQUEST_LABEL_REJECTED");
+  return { pullNumber: args.pullNumber, label: "review" };
 }
 
 async function executeFencedMerge(call, config, provider) {
@@ -207,6 +344,7 @@ function pullRequestIdentity(bytes, owner, repo, requestId) {
 
 export function startBroker(config, provider) {
   let issuesCreated = 0;
+  let mutationSubject;
   const server = http.createServer(async (request, response) => {
     const controller = new AbortController();
     if (request.method === "GET") {
@@ -230,6 +368,11 @@ export function startBroker(config, provider) {
         return;
       }
       const body = await readRequest(request);
+      const issueSubject = request.method === "POST" ? issueMutationSubject(body) : undefined;
+      if (issueSubject) {
+        if (mutationSubject && mutationSubject !== issueSubject) throw new Error("MUTATION_SUBJECT_LIMIT_EXCEEDED");
+        mutationSubject = issueSubject;
+      }
       if (request.method === "POST" && createsIssue(body) && config.maxIssuesCreated !== undefined) {
         if (issuesCreated >= config.maxIssuesCreated) throw new Error("ISSUE_CREATE_LIMIT_EXCEEDED");
         issuesCreated += 1;
@@ -238,6 +381,54 @@ export function startBroker(config, provider) {
       if (mergeCall) {
         const merged = await executeFencedMerge(mergeCall, config, provider);
         response.writeHead(merged.status, { "content-type": "application/json" }).end(merged.bytes);
+        return;
+      }
+      const workspacePushCall = request.method === "POST" ? rpcCall(body, "push_workspace_files") : undefined;
+      if (workspacePushCall) {
+        try {
+          const pushed = await executeWorkspacePush(workspacePushCall, config, provider);
+          response.writeHead(200, { "content-type": "application/json" }).end(mcpResult(workspacePushCall.id, pushed));
+        } catch (error) {
+          response.writeHead(200, { "content-type": "application/json" }).end(mcpResult(workspacePushCall.id, { error: error instanceof Error ? error.message : "Workspace push failed" }, true));
+        }
+        return;
+      }
+      const lifecycleCall = request.method === "POST" ? rpcCall(body, "dispatch_issue_lifecycles") : undefined;
+      if (lifecycleCall) {
+        try {
+          if (!config.effect || !config.repositoryId) throw new Error("LIFECYCLE_QUERY_UNAVAILABLE");
+          const lifecycles = await effectRequest(config, "/internal/v1/github/issue-lifecycles", {
+            executionId: config.effect.executionId, repositoryId: config.repositoryId,
+          });
+          response.writeHead(200, { "content-type": "application/json" }).end(mcpResult(lifecycleCall.id, lifecycles));
+        } catch (error) {
+          response.writeHead(200, { "content-type": "application/json" }).end(mcpResult(lifecycleCall.id, { error: error instanceof Error ? error.message : "Lifecycle query failed" }, true));
+        }
+        return;
+      }
+      const labelPullRequestCall = request.method === "POST" ? rpcCall(body, "label_pull_request_for_review") : undefined;
+      if (labelPullRequestCall) {
+        try {
+          const args = labelPullRequestCall.args;
+          const subject = `pull:${String(args?.owner).toLowerCase()}/${String(args?.repo).toLowerCase()}#${String(args?.pullNumber)}`;
+          if (mutationSubject && mutationSubject !== subject) throw new Error("MUTATION_SUBJECT_LIMIT_EXCEEDED");
+          mutationSubject = subject;
+          const labeled = await executePullRequestLabel(labelPullRequestCall, config, provider);
+          response.writeHead(200, { "content-type": "application/json" }).end(mcpResult(labelPullRequestCall.id, labeled));
+        } catch (error) {
+          response.writeHead(200, { "content-type": "application/json" }).end(mcpResult(labelPullRequestCall.id, { error: error instanceof Error ? error.message : "PR label failed" }, true));
+        }
+        return;
+      }
+      const listCall = request.method === "POST" ? toolsListCall(body) : undefined;
+      if (listCall && (config.effect || (config.workspace && config.permissions?.contents === "write") || config.permissions?.issues === "write")) {
+        const upstream = await forward(request, body, config, provider, controller.signal);
+        const envelope = rpcEnvelope(await responseBytes(upstream));
+        if (!Array.isArray(envelope.result?.tools)) throw new Error("INVALID_TOOLS_LIST");
+        if (config.workspace && config.permissions?.contents === "write") envelope.result.tools.push(workspacePushTool);
+        if (config.effect) envelope.result.tools.push(issueLifecyclesTool);
+        if (config.permissions?.issues === "write") envelope.result.tools.push(labelPullRequestTool);
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(envelope));
         return;
       }
       const createCall = request.method === "POST" ? createPullRequestArguments(body) : undefined;

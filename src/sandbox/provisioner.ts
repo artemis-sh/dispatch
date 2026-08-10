@@ -283,6 +283,12 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_GIT_URL", value: input.workspace.repository.url },
         { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_GIT_COMMIT", value: input.workspace.revision.commit },
       );
+      if (input.connections.some(({ sidecar }) => sidecar === "github-token-broker")) {
+        env.push(
+          { containerName: "github-token-broker", name: "DISPATCH_WORKSPACE_DIRECTORY", value: "/workspace" },
+          { containerName: "github-token-broker", name: "DISPATCH_WORKSPACE_GIT_COMMIT", value: input.workspace.revision.commit },
+        );
+      }
     }
     for (const [sidecar, refs] of groupedConnections(input.connections)) {
       env.push({

@@ -1,0 +1,80 @@
+{{- with .Values.projectMaintenanceCron }}
+{{- if .enabled }}
+{{- if not .repository.id }}{{ fail "projectMaintenanceCron.repository.id is required when projectMaintenanceCron.enabled=true" }}{{- end }}
+{{- if not .repository.fullName }}{{ fail "projectMaintenanceCron.repository.fullName is required when projectMaintenanceCron.enabled=true" }}{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "dispatch.fullname" $ }}-project-maintenance
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "dispatch.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: project-maintenance
+spec:
+  schedule: {{ .schedule | quote }}
+  timeZone: {{ .timeZone | quote }}
+  concurrencyPolicy: {{ .concurrencyPolicy }}
+  startingDeadlineSeconds: {{ .startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ .successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            {{- include "dispatch.selectorLabels" $ | nindent 12 }}
+            app.kubernetes.io/component: project-maintenance
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "dispatch.serviceAccountName" $ }}
+          automountServiceAccountToken: false
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: submit
+              image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["node", "dist/bug-finder/submit.js"]
+              env:
+                - name: BUG_FINDER_RUN_ID
+                  valueFrom: { fieldRef: { fieldPath: metadata.uid } }
+                - { name: SCHEDULED_AGENT_EVENT_TYPE, value: dev.dispatch.repository.maintenance.requested }
+                - { name: BUG_FINDER_DISPATCH_URL, value: {{ printf "http://%s.%s.svc:%v" (include "dispatch.fullname" $) $.Release.Namespace $.Values.service.port | quote }} }
+                - { name: BUG_FINDER_TRIGGER_ID, value: {{ .triggerId | quote }} }
+                - { name: BUG_FINDER_REPOSITORY_ID, value: {{ .repository.id | quote }} }
+                - { name: BUG_FINDER_REPOSITORY_FULL_NAME, value: {{ .repository.fullName | quote }} }
+                - { name: BUG_FINDER_DEFAULT_BRANCH, value: {{ .repository.defaultBranch | quote }} }
+                - { name: BUG_FINDER_DISPATCH_TOKEN_FILE, value: /var/run/dispatch/runtime/DISPATCH_ADMIN_TOKEN }
+                - { name: BUG_FINDER_GITHUB_APP_ID_FILE, value: /var/run/dispatch/github-app/app-id }
+                - { name: BUG_FINDER_GITHUB_INSTALLATION_ID_FILE, value: /var/run/dispatch/github-app/installation-id }
+                - { name: BUG_FINDER_GITHUB_PRIVATE_KEY_FILE, value: /var/run/dispatch/github-app/private-key.pem }
+              volumeMounts:
+                - { name: runtime, mountPath: /var/run/dispatch/runtime, readOnly: true }
+                - { name: github-app, mountPath: /var/run/dispatch/github-app, readOnly: true }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+              resources:
+                {{- toYaml .resources | nindent 16 }}
+          volumes:
+            - name: runtime
+              secret:
+                secretName: {{ include "dispatch.secretName" $ | quote }}
+                items:
+                  - { key: DISPATCH_ADMIN_TOKEN, path: DISPATCH_ADMIN_TOKEN }
+            - name: github-app
+              secret:
+                secretName: {{ required "projectMaintenanceCron.githubCredentialsSecret is required when projectMaintenanceCron.enabled=true" .githubCredentialsSecret | quote }}
+                items:
+                  - { key: app-id, path: app-id }
+                  - { key: installation-id, path: installation-id }
+                  - { key: private-key.pem, path: private-key.pem }
+{{- end }}
+{{- end }}

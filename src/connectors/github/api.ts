@@ -8,6 +8,7 @@ import { sourceDeliveryIdempotencyKey } from "../../execution/idempotency.js";
 import type { EventAdmissionStore } from "../../execution/store.js";
 import { IdempotencyConflictError } from "../../execution/types.js";
 import { hashCanonicalJson, type JsonValue } from "../../json.js";
+import { logger } from "../../logger.js";
 import { WorkspaceResolutionError } from "../../workspace/resolver.js";
 import { githubWebhookRoute } from "./api-schema.js";
 import { normalizeGitHubEvent, type GitHubEventName } from "./normalize.js";
@@ -186,7 +187,10 @@ async function handle(context: Context, run: () => Promise<Response>): Promise<R
   } catch (error) {
     if (error instanceof TriggerNotFoundError) return context.json({ error: "Trigger not found" }, 404);
     if (error instanceof IdempotencyConflictError) return context.json({ error: "Delivery conflict" }, 409);
-    if (error instanceof WorkspaceResolutionError) return context.json({ error: "Workspace could not be resolved from event data" }, 422);
+    if (error instanceof WorkspaceResolutionError) {
+      logger.warn("github webhook workspace resolution failed", { error: error.message });
+      return context.json({ error: "Workspace could not be resolved from event data" }, 422);
+    }
     return context.json({ error: "Internal server error" }, 500);
   }
 }

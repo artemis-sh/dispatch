@@ -66,7 +66,7 @@ import { normalizedCloudEventSchema, type NormalizedCloudEvent } from "../execut
 import type { ClaimedRevisionResolution, RevisionAwareAdmissionCommand, RevisionResolutionStore } from "../revision/types.js";
 import { matchesBinding } from "../control/admission.js";
 import { resolvedWorkspaceSchema } from "../workspace/schema.js";
-import { resolveWorkspace } from "../workspace/resolver.js";
+import { WorkspaceResolutionError, resolveWorkspace } from "../workspace/resolver.js";
 import { nextCronOccurrence } from "../schedule/cron.js";
 import type { ClaimedScheduleOccurrence, ScheduleStore } from "../schedule/types.js";
 import type { ObservabilitySnapshot, ObservabilitySnapshotRow, ObservabilityStore } from "../observability/types.js";
@@ -559,9 +559,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         WHERE binding.tenant_id = $1 AND binding.trigger_id = $2 AND binding.enabled AND $3 = ANY(binding.event_types)
         ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
       [command.tenantId, command.triggerId, command.event.type]);
-      const revisionResolution = "revisionResolution" in command ? command.revisionResolution : undefined;
-      const requiresResolution = revisionResolution !== undefined && candidates.rows.some((row) =>
-        isDefaultBranchRevisionBinding(row) && matchesBinding(bindingFromRow(row), command.event));
+      const requestedResolution = "revisionResolution" in command ? command.revisionResolution : undefined;
+      const resolutionCandidates = candidates.rows.filter((row) => requiresRevisionResolution(bindingFromRow(row), command.event));
+      const requiresResolution = resolutionCandidates.length > 0;
+      const revisionResolution = requiresResolution
+        ? requestedResolution ?? await this.recoverGitHubRevisionResolution(client, command)
+        : undefined;
+      if (requiresResolution && !revisionResolution) throw new WorkspaceResolutionError("Workspace revision resolution requires a GitHub installation identity");
       const extensions = eventExtensions(command.event);
       await acquireWakeContextLocks(client, command, candidates.rows);
       await client.query(`INSERT INTO dispatch_events
@@ -586,7 +590,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           content: "eyes",
         }), new Date(command.admittedAt)]);
       }
-      if (requiresResolution) {
+      if (revisionResolution) {
         await client.query(`INSERT INTO dispatch_event_revision_resolutions
           (event_id, tenant_id, provider, installation_id, repository_id, repository_full_name, clone_url, branch,
            state, available_at, created_at, updated_at)
@@ -596,11 +600,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           revisionResolution.branch, new Date(command.admittedAt),
         ]);
       }
-      const created = await this.createExecutions(
-        client,
-        command,
-        requiresResolution ? candidates.rows.filter((row) => !isDefaultBranchRevisionBinding(row)) : candidates.rows,
-      );
+      const created = await this.createExecutions(client, command, requiresResolution
+        ? candidates.rows.filter((row) => !resolutionCandidates.includes(row))
+        : candidates.rows);
       await this.persistWakeOffers(client, command, candidates.rows);
       const pendingWakes = await this.admitPendingWakes(client, command, candidates.rows);
       const wakes = await this.consumeEventWaits(client, command, candidates.rows);
@@ -709,7 +711,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         admissionHash: eventRow.admission_hash,
         admittedAt: input.resolvedAt,
       };
-      const created = await this.createExecutions(client, command, candidates.rows.filter(isDefaultBranchRevisionBinding));
+      const created = await this.createExecutions(client, command, candidates.rows.filter((row) => requiresRevisionResolution(bindingFromRow(row), event)));
       await client.query(`UPDATE dispatch_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
         WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
@@ -833,6 +835,29 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       created.push(executionRecordFromJoined(execution.rows[0]!));
     }
     return created;
+  }
+
+  private async recoverGitHubRevisionResolution(client: pg.PoolClient, command: AdmissionCommand): Promise<NonNullable<RevisionAwareAdmissionCommand["revisionResolution"]> | undefined> {
+    const data = command.event.data;
+    if (data === null || typeof data !== "object" || Array.isArray(data)) return undefined;
+    const repository = (data as Record<string, JsonValue>).repository;
+    if (repository === null || typeof repository !== "object" || Array.isArray(repository)) return undefined;
+    const value = repository as Record<string, JsonValue>;
+    if (typeof value.id !== "number" || !Number.isSafeInteger(value.id) || value.id < 1
+      || typeof value.fullName !== "string" || typeof value.cloneUrl !== "string" || typeof value.defaultBranch !== "string") return undefined;
+    const prior = await client.query<{ installation_id: string }>(`SELECT data->>'installationId' AS installation_id FROM dispatch_events
+      WHERE tenant_id=$1 AND trigger_id=$2 AND data->'repository'->>'id'=$3 AND data->>'installationId' ~ '^[1-9][0-9]*$'
+      ORDER BY ingested_at DESC, id DESC LIMIT 1`, [command.tenantId, command.triggerId, String(value.id)]);
+    const installationId = Number(prior.rows[0]?.installation_id);
+    if (!Number.isSafeInteger(installationId) || installationId < 1) return undefined;
+    return {
+      provider: "github",
+      installationId,
+      repositoryId: value.id,
+      repositoryFullName: value.fullName,
+      cloneUrl: value.cloneUrl,
+      branch: value.defaultBranch,
+    };
   }
 
   private async consumeEventWaits(
@@ -1124,6 +1149,37 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
 
+  async listGitHubIssueLifecycles(command: { executionId: string; fencingToken: string; repositoryId: number; tenantId: string }): Promise<unknown[]> {
+    const authorized = await this.pool.query(`SELECT 1 FROM dispatch_executions execution
+      JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
+      JOIN dispatch_events event ON event.id=execution.event_id AND event.tenant_id=execution.tenant_id
+      WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+        AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
+        AND event.data->'repository'->>'id'=$4 LIMIT 1`,
+    [command.tenantId, command.executionId, command.fencingToken, String(command.repositoryId)]);
+    if (authorized.rowCount !== 1) throw new Error("Execution lifecycle capability is not current");
+    const result = await this.pool.query<{ issue_number: number; execution_id: string; execution_state: string; binding_id: string; error: string | null; effect_state: string | null; pull_request_number: number | null; updated_at: Date; missing_pr_effect_failures: number }>(`SELECT DISTINCT ON ((event.data->'issue'->>'number')::integer)
+        (event.data->'issue'->>'number')::integer AS issue_number, execution.id AS execution_id,
+        execution.state AS execution_state, binding.binding_id, execution.result->>'error' AS error,
+        effect.state AS effect_state, effect.pull_request_number, execution.updated_at,
+        (count(*) FILTER (WHERE execution.result->>'error'='MISSING_REQUIRED_GITHUB_PR_EFFECT') OVER
+          (PARTITION BY event.data->'issue'->>'number'))::integer AS missing_pr_effect_failures
+      FROM dispatch_executions execution
+      JOIN dispatch_events event ON event.id=execution.event_id AND event.tenant_id=execution.tenant_id
+      JOIN dispatch_binding_versions binding ON binding.id=execution.binding_version_id AND binding.tenant_id=execution.tenant_id
+      LEFT JOIN dispatch_github_pull_request_effects effect ON effect.execution_id=execution.id AND effect.tenant_id=execution.tenant_id
+      WHERE execution.tenant_id=$1 AND event.data->'repository'->>'id'=$2
+        AND event.data->'issue'->>'number' ~ '^[1-9][0-9]*$' AND binding.binding_id LIKE 'develop-%'
+      ORDER BY (event.data->'issue'->>'number')::integer, execution.created_at DESC, execution.id DESC LIMIT 200`,
+    [command.tenantId, String(command.repositoryId)]);
+    return result.rows.map((row) => ({
+      issueNumber: row.issue_number, executionId: row.execution_id, executionState: row.execution_state,
+      bindingId: row.binding_id, error: row.error, effectState: row.effect_state,
+      pullRequestNumber: row.pull_request_number, missingPrEffectFailures: row.missing_pr_effect_failures,
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+
   async reportGitHubPullRequestEffect(command: {
     effectId: string; executionId: string; fencingToken: string; githubPullRequestId: string;
     pullRequestNumber: number; pullRequestUrl: string; reportedAt: string; tenantId: string;
@@ -1187,8 +1243,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         WHERE tenant_id=$1 AND execution_id=$2 AND authority_type='github.pull-request-effect' AND authority_id=$3 AND name='pullRequestNumber'`,
       [tenantId, candidate.execution_id, candidate.id]);
       if (!supplied.rows[0]) {
+        const context = await this.pool.query<{ name: string }>(`SELECT name FROM dispatch_execution_wake_contexts
+          WHERE tenant_id=$1 AND execution_id=$2 AND state IN ('BUILDING','READY')
+          ORDER BY created_at DESC, id DESC LIMIT 1`, [tenantId, candidate.execution_id]);
+        const waitName = context.rows[0]?.name;
+        if (!waitName) throw new Error("Developer pull request effect has no active lifecycle context");
         await this.bindExecutionWakeContextValue({ authorityId: candidate.id, authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
-          executionId: candidate.execution_id, slot: "primaryPullRequestNumber", tenantId, value: pullRequestNumber, waitName: "developer-pr-lifecycle" });
+          executionId: candidate.execution_id, slot: "primaryPullRequestNumber", tenantId, value: pullRequestNumber, waitName });
       } else if (supplied.rows[0].value !== pullRequestNumber) throw new IdempotencyConflictError();
       await this.pool.query(`UPDATE dispatch_github_pull_request_effects SET state='CONFIRMED',github_pull_request_id=$4,pull_request_number=$5,pull_request_url=$6,
         opened_event_id=$3,confirmed_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2 AND state IN ('REGISTERED','REPORTED')`,
@@ -2822,6 +2883,13 @@ function bindingFromRow(row: BindingRow): PublishedBindingVersion {
     triggerId: row.trigger_id,
     version: row.version,
   };
+}
+
+function requiresRevisionResolution(binding: PublishedBindingVersion, event: NormalizedCloudEvent): boolean {
+  return matchesBinding(binding, event)
+    && !("disposition" in binding.definition)
+    && binding.definition.workspace.type === "git"
+    && binding.definition.workspace.revision.commit.path === "/repository/defaultBranchRevision/commit";
 }
 
 const BINDING_SELECT = `SELECT binding.*, profile.profile_id, profile.version AS profile_version
