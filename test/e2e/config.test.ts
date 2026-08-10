@@ -38,6 +38,11 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ [name]: value })).toThrow(/port|integer/i);
   });
 
+  it("rejects shared concrete API and metrics ports", () => {
+    expect(() => loadConfig({ PORT: "3000", DISPATCH_METRICS_PORT: "3000" })).toThrow(/metrics.*port|port.*metrics/i);
+    expect(() => loadConfig({ PORT: "9090" })).toThrow(/metrics.*port|port.*metrics/i);
+  });
+
   it("allows ephemeral listener ports but requires a concrete OpenCode port", () => {
     expect(loadConfig({ PORT: "0", DISPATCH_METRICS_PORT: "0" })).toMatchObject({ port: 0, metricsPort: 0 });
     expect(() => loadConfig({ DISPATCH_OPENCODE_PORT: "0" })).toThrow(/port/i);
