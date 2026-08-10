@@ -328,7 +328,7 @@ bugFinderCron:
   ttlSecondsAfterFinished: 86400
   resources:
     requests: { cpu: 10m, memory: 32Mi }
-  limits: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 100m, memory: 128Mi }
 
 projectMaintenanceCron:
   # -- Inspect the project backlog hourly and make at most one bounded follow-up.
