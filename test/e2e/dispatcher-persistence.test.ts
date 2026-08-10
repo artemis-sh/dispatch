@@ -994,6 +994,23 @@ describe("dispatcher persistence", () => {
     expect(expiredDetail?.transitions).toEqual(expect.arrayContaining([expect.objectContaining({ fromState: "WAITING", toState: "TIMED_OUT", attempt: null })]));
   });
 
+  it("marks the attempt timed out when completion observes an elapsed execution deadline", async () => {
+    const executionId = await queueExecution();
+    const claimed = await startRunningExecution(executionId, "deadline-worker");
+
+    await pool.query("UPDATE dispatch_executions SET timeout_at = clock_timestamp() WHERE id = $1", [executionId]);
+
+    const completion = await store.completeLeasedExecutionTurn({
+      actor: "deadline-worker", attempt: claimed.lease.attempt, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "turn completed", result: { output: "late" }, tenantId: "default",
+    });
+
+    expect(completion).toMatchObject({ applied: true, executionState: "TIMED_OUT", attemptState: "TIMED_OUT" });
+    expect((await executionSnapshot(executionId)).attempts).toMatchObject([
+      { attempt: claimed.lease.attempt, state: "TIMED_OUT" },
+    ]);
+  });
+
   it("rolls back turn completion when configured correlation is not a bounded primitive", async () => {
     const token = randomUUID();
     const eventType = `dev.dispatch.invalid-wait.${token}`;
