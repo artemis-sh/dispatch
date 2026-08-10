@@ -1,6 +1,7 @@
 import http from "node:http";
 import net from "node:net";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, realpath } from "node:fs/promises";
 import { resolve, relative, isAbsolute } from "node:path";
 
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -229,8 +230,13 @@ async function executeWorkspacePush(call, config, provider) {
     if (typeof path !== "string" || path.length > 512 || isAbsolute(path) || path.split("/").some((part) => part === "" || part === "." || part === "..")) throw new Error("INVALID_WORKSPACE_PATH");
     const absolute = await realpath(resolve(root, path));
     const within = relative(root, absolute);
-    if (within.startsWith("..") || isAbsolute(within) || (await stat(absolute)).isFile() !== true) throw new Error("INVALID_WORKSPACE_PATH");
-    const content = await readFile(absolute);
+    if (within.startsWith("..") || isAbsolute(within)) throw new Error("INVALID_WORKSPACE_PATH");
+    const file = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let content;
+    try {
+      if (!(await file.stat()).isFile()) throw new Error("INVALID_WORKSPACE_PATH");
+      content = await file.readFile();
+    } finally { await file.close(); }
     total += content.length;
     if (total > MAX_WORKSPACE_PUSH_BYTES) throw new Error("WORKSPACE_PUSH_TOO_LARGE");
     files.push({ path, content: content.toString("base64") });
