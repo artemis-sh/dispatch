@@ -430,6 +430,28 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("does not delete a claim when fence confirmation completes after the deadline", async () => {
+    const existing = claim(true);
+    existing.metadata.resourceVersion = "17";
+    existing.metadata.annotations!["dispatch.dev/fencing-token"] = "old-fence";
+    const adopted = claim(true);
+    adopted.metadata.resourceVersion = "18";
+    adopted.metadata.annotations!["dispatch.dev/fencing-token"] = input.fencingToken;
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
+      .mockResolvedValueOnce(existing)
+      .mockImplementationOnce(async () => new Promise((resolve) => setTimeout(() => resolve(adopted), 75)))
+      .mockResolvedValue(adopted);
+    vi.spyOn(CustomObjectsApi.prototype, "patchNamespacedCustomObject").mockResolvedValue(adopted);
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
+
+    await expect(provisioner(50).adopt(
+      input,
+      claimNameForExecutionAttempt(input.executionId, input.attempt),
+      new AbortController().signal,
+    )).resolves.toMatchObject({ workloadName: claimNameForExecutionAttempt(input.executionId, input.attempt) });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it("rereads and retries a conflicting fence transfer without deleting the claim", async () => {
     const existing = claim(true);
     existing.metadata.resourceVersion = "17";

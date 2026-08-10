@@ -160,8 +160,8 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         if (!claim) throw new Error(`SandboxClaim ${claimName} disappeared during adoption`);
         assertOwnership(claim, ownership, new Set([FENCING_TOKEN_ANNOTATION]));
         fenceTransferred = claim.metadata.annotations?.[FENCING_TOKEN_ANNOTATION] === input.fencingToken;
-        if (Date.now() >= deadline) throw new Error(`Timed out transferring SandboxClaim ${claimName} fencing ownership`);
         if (!fenceTransferred) {
+          if (Date.now() >= deadline) throw new Error(`Timed out transferring SandboxClaim ${claimName} fencing ownership`);
           await abortableDelay(Math.min(100, Math.max(1, deadline - Date.now())), signal);
         }
       }

@@ -560,13 +560,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
       [command.tenantId, command.triggerId, command.event.type]);
       const revisionResolution = "revisionResolution" in command ? command.revisionResolution : undefined;
-      const requiresResolution = revisionResolution !== undefined && candidates.rows.some((row) => {
-        const binding = bindingFromRow(row);
-        return matchesBinding(binding, command.event)
-          && !("disposition" in binding.definition)
-          && binding.definition.workspace.type === "git"
-          && binding.definition.workspace.revision.commit.path === "/repository/defaultBranchRevision/commit";
-      });
+      const requiresResolution = revisionResolution !== undefined && candidates.rows.some((row) =>
+        isDefaultBranchRevisionBinding(row) && matchesBinding(bindingFromRow(row), command.event));
       const extensions = eventExtensions(command.event);
       await acquireWakeContextLocks(client, command, candidates.rows);
       await client.query(`INSERT INTO dispatch_events
@@ -601,7 +596,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           revisionResolution.branch, new Date(command.admittedAt),
         ]);
       }
-      const created = requiresResolution ? [] : await this.createExecutions(client, command, candidates.rows);
+      const created = await this.createExecutions(
+        client,
+        command,
+        requiresResolution ? candidates.rows.filter((row) => !isDefaultBranchRevisionBinding(row)) : candidates.rows,
+      );
       await this.persistWakeOffers(client, command, candidates.rows);
       const pendingWakes = await this.admitPendingWakes(client, command, candidates.rows);
       const wakes = await this.consumeEventWaits(client, command, candidates.rows);
@@ -710,7 +709,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         admissionHash: eventRow.admission_hash,
         admittedAt: input.resolvedAt,
       };
-      const created = await this.createExecutions(client, command, candidates.rows);
+      const created = await this.createExecutions(client, command, candidates.rows.filter(isDefaultBranchRevisionBinding));
       await client.query(`UPDATE dispatch_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
         WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
@@ -2351,10 +2350,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           JSON.stringify(pending.input), JSON.stringify(pending.workspace), now]);
       }
 
-      await client.query(`UPDATE dispatch_execution_attempts SET state = 'SUCCEEDED', finished_at = $6,
+      const attemptState = executionState === "TIMED_OUT" ? "TIMED_OUT" : "SUCCEEDED";
+      await client.query(`UPDATE dispatch_execution_attempts SET state = $6::text, finished_at = $7,
         lease_owner = NULL, lease_expires_at = NULL WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
         AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'`,
-      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, now]);
+      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, attemptState, now]);
       await client.query(`UPDATE dispatch_executions SET state = $3::text, result = $4::jsonb, updated_at = $5::timestamptz,
         timeout_at = CASE
           WHEN $3::text = 'WAITING' THEN $6::timestamptz
@@ -2431,7 +2431,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           'RUNNING',$5,$6,$7,$8)`, [randomUUID(), command.tenantId, command.executionId, command.attempt, executionState, command.actor, command.reason, now]);
       await client.query("COMMIT");
       if (checkpointOutcome) checkpointAdvances.inc({ tenant: command.tenantId, binding_id: checkpointOutcome.bindingId, result: checkpointOutcome.result });
-      return { applied: true, attemptState: "SUCCEEDED", executionState, ...(executionState === "WAITING" && wait ? { eventWaitId: wait.id } : {}) };
+      return { applied: true, attemptState, executionState, ...(executionState === "WAITING" && wait ? { eventWaitId: wait.id } : {}) };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -2509,6 +2509,13 @@ type BindingRow = {
 };
 
 type BindingProfileRow = BindingRow & { profile_definition: Record<string, unknown> };
+
+function isDefaultBranchRevisionBinding(row: BindingProfileRow): boolean {
+  const binding = bindingFromRow(row);
+  if ("disposition" in binding.definition) return false;
+  return binding.definition.workspace.type === "git"
+    && binding.definition.workspace.revision.commit.path === "/repository/defaultBranchRevision/commit";
+}
 type EventRow = {
   admission_hash: string;
   data: unknown;
