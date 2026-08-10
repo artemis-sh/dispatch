@@ -560,13 +560,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
       [command.tenantId, command.triggerId, command.event.type]);
       const revisionResolution = "revisionResolution" in command ? command.revisionResolution : undefined;
-      const requiresResolution = revisionResolution !== undefined && candidates.rows.some((row) => {
-        const binding = bindingFromRow(row);
-        return matchesBinding(binding, command.event)
-          && !("disposition" in binding.definition)
-          && binding.definition.workspace.type === "git"
-          && binding.definition.workspace.revision.commit.path === "/repository/defaultBranchRevision/commit";
-      });
+      const requiresResolution = revisionResolution !== undefined && candidates.rows.some((row) =>
+        isDefaultBranchRevisionBinding(row) && matchesBinding(bindingFromRow(row), command.event));
       const extensions = eventExtensions(command.event);
       await acquireWakeContextLocks(client, command, candidates.rows);
       await client.query(`INSERT INTO dispatch_events
@@ -601,7 +596,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           revisionResolution.branch, new Date(command.admittedAt),
         ]);
       }
-      const created = requiresResolution ? [] : await this.createExecutions(client, command, candidates.rows);
+      const created = await this.createExecutions(
+        client,
+        command,
+        requiresResolution ? candidates.rows.filter((row) => !isDefaultBranchRevisionBinding(row)) : candidates.rows,
+      );
       await this.persistWakeOffers(client, command, candidates.rows);
       const pendingWakes = await this.admitPendingWakes(client, command, candidates.rows);
       const wakes = await this.consumeEventWaits(client, command, candidates.rows);
@@ -710,7 +709,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         admissionHash: eventRow.admission_hash,
         admittedAt: input.resolvedAt,
       };
-      const created = await this.createExecutions(client, command, candidates.rows);
+      const created = await this.createExecutions(client, command, candidates.rows.filter(isDefaultBranchRevisionBinding));
       await client.query(`UPDATE dispatch_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
         WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
@@ -2509,6 +2508,13 @@ type BindingRow = {
 };
 
 type BindingProfileRow = BindingRow & { profile_definition: Record<string, unknown> };
+
+function isDefaultBranchRevisionBinding(row: BindingProfileRow): boolean {
+  const binding = bindingFromRow(row);
+  if ("disposition" in binding.definition) return false;
+  return binding.definition.workspace.type === "git"
+    && binding.definition.workspace.revision.commit.path === "/repository/defaultBranchRevision/commit";
+}
 type EventRow = {
   admission_hash: string;
   data: unknown;
