@@ -1,6 +1,9 @@
 import { generateKeyPairSync } from "node:crypto";
 import http from "node:http";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // @ts-expect-error The broker intentionally ships as dependency-free Node ESM.
@@ -19,9 +22,11 @@ const config = {
   permissions: { contents: "write", issues: "write", pull_requests: "write" },
 };
 const running: Array<{ close: () => Promise<void> }> = [];
+const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(running.splice(0).map(({ close }) => close()));
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   vi.unstubAllGlobals();
 });
 
@@ -176,6 +181,42 @@ describe("GitHub token broker", () => {
     expect(upstreamCalls).toBe(1);
   });
 
+  it("limits maintenance mutations to one issue subject", async () => {
+    let upstreamCalls = 0;
+    const upstream = await listen(http.createServer((_request, response) => {
+      upstreamCalls += 1;
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    }));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0 },
+      { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const endpoint = `http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`;
+    const update = (issue_number: number) => fetch(endpoint, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: issue_number, method: "tools/call", params: {
+      name: "issue_write", arguments: { method: "update", owner: "acme", repo: "repo", issue_number, labels: ["medium"] },
+    } }) });
+    expect((await update(7)).status).toBe(200);
+    expect((await update(7)).status).toBe(200);
+    expect((await update(8)).status).toBe(502);
+    expect(upstreamCalls).toBe(2);
+  });
+
+  it("returns a structured MCP error when PR review labeling is rejected", async () => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).startsWith("https://api.github.com/")) return Response.json({ state: "closed" });
+      return originalFetch(input, init);
+    }));
+    const broker = await startBroker({ ...config, upstream: "http://127.0.0.1:1/", host: "127.0.0.1", port: 0 },
+      { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const response = await originalFetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "label_pull_request_for_review", arguments: { owner: "acme", repo: "repo", pullNumber: 7 } },
+    }) });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ result: { isError: true } });
+  });
+
   it("streams MCP SSE responses", async () => {
     const upstream = await listen(http.createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -271,6 +312,47 @@ describe("GitHub token broker", () => {
       expect.objectContaining({ url: "/internal/v1/github/pull-request-effects", authorization: "Bearer fence", body: expect.objectContaining({ executionId: "execution-1", repositoryId: 7, repositoryFullName: "acme/repo" }) }),
       expect.objectContaining({ url: "/internal/v1/github/pull-request-effects/effect-1/report", body: expect.objectContaining({ githubPullRequestId: "9001", pullRequestNumber: 42 }) }),
     ]);
+  });
+
+  it("exposes and executes a fenced workspace file push", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dispatch-broker-"));
+    temporaryDirectories.push(directory);
+    await writeFile(join(directory, "large.ts"), "export const fixed = true;\n");
+    const upstream = await listen(http.createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { tools: [] } }));
+    }));
+    running.push(upstream);
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ method: string; path: string; body?: any }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname !== "api.github.com") return originalFetch(input, init);
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      requests.push({ method: init?.method ?? "GET", path: url.pathname, body });
+      if (url.pathname.includes("/git/ref/heads/")) return Response.json({ object: { type: "commit", sha: "a".repeat(40) } });
+      if (url.pathname.endsWith(`/git/commits/${"a".repeat(40)}`)) return Response.json({ tree: { sha: "base-tree" } });
+      if (url.pathname.endsWith("/git/blobs")) return Response.json({ sha: "blob-sha" });
+      if (url.pathname.endsWith("/git/trees")) return Response.json({ sha: "tree-sha" });
+      if (url.pathname.endsWith("/git/commits")) return Response.json({ sha: "commit-sha" });
+      return Response.json({ ok: true });
+    }));
+    const broker = await startBroker({ ...config, upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0,
+      workspace: { baseCommit: "a".repeat(40), directory } }, { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const endpoint = `http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`;
+    const tools = await fetch(endpoint, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }).then((response) => response.json()) as any;
+    expect(tools.result.tools.map((tool: { name: string }) => tool.name)).toContain("push_workspace_files");
+    const pushed = await fetch(endpoint, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "push_workspace_files", arguments: { owner: "acme", repo: "repo", branch: "fix/large", message: "fix: update large file", paths: ["large.ts"] },
+    } }) }).then((response) => response.json()) as any;
+    expect(pushed.result.isError).not.toBe(true);
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({ method: "POST", path: "/repos/acme/repo/git/blobs", body: { content: Buffer.from("export const fixed = true;\n").toString("base64"), encoding: "base64" } }),
+      expect.objectContaining({ method: "PATCH", path: "/repos/acme/repo/git/refs/heads/fix/large", body: { sha: "commit-sha", force: false } }),
+    ]));
   });
 
   it("parses an SSE create_pull_request result and refuses duplicate mutation registration", async () => {

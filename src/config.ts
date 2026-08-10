@@ -93,7 +93,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error("DISPATCH_DISPATCHER_RENEW_INTERVAL_MS must be less than DISPATCH_DISPATCHER_LEASE_DURATION_MS");
   }
   if (config.scheduleWorkerEnabled && !config.revisionResolverEnabled) {
-    throw new Error("DISPATCH_SCHEDULE_WORKER_ENABLED requires DISPATCH_REVISION_RESOLVER_ENABLED");
+    throw new Error("Schedule worker requires the revision resolver to be enabled");
   }
   if ((config.revisionResolverEnabled || config.githubIssueAcknowledgmentEnabled) && (!config.githubAppIdFile || !config.githubAppPrivateKeyFile)) {
     throw new Error("DISPATCH_GITHUB_APP_ID_FILE and DISPATCH_GITHUB_PRIVATE_KEY_FILE are required when GitHub control-plane workers are enabled");

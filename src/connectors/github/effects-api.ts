@@ -14,10 +14,11 @@ const reportSchema = z.object({
 export type GitHubEffectStore = {
   registerGitHubPullRequestEffect(command: { baseRef: string; executionId: string; fencingToken: string; headRef: string; pullRequestTitle: string; registeredAt: string; repositoryFullName: string; repositoryId: number; requestHash: string; tenantId: string }): Promise<{ created: boolean; id: string; state: string }>;
   reportGitHubPullRequestEffect(command: { effectId: string; executionId: string; fencingToken: string; githubPullRequestId: string; pullRequestNumber: number; pullRequestUrl: string; reportedAt: string; tenantId: string }): Promise<{ id: string; state: string }>;
+  listGitHubIssueLifecycles(command: { executionId: string; fencingToken: string; repositoryId: number; tenantId: string }): Promise<unknown[]>;
 };
 
 export function mountGitHubEffectsApi(app: OpenAPIHono<any>, store: GitHubEffectStore): void {
-  app.use("/internal/v1/github/pull-request-effects*", bodyLimit({ maxSize: 64 * 1024, onError: (context) => context.json({ error: "Request body too large" }, 413) }));
+  app.use("/internal/v1/github/*", bodyLimit({ maxSize: 64 * 1024, onError: (context) => context.json({ error: "Request body too large" }, 413) }));
   app.post("/internal/v1/github/pull-request-effects", async (context) => {
     const token = bearer(context.req.header("authorization"));
     if (!token) return context.json({ error: "Unauthorized" }, 401);
@@ -39,6 +40,16 @@ export function mountGitHubEffectsApi(app: OpenAPIHono<any>, store: GitHubEffect
       const result = await store.reportGitHubPullRequestEffect({ ...parsed.data, tenantId: "default", effectId: context.req.param("effectId"), fencingToken: token, reportedAt: new Date().toISOString() });
       return context.json(result, 200);
     } catch { return context.json({ error: "Effect report rejected" }, 409); }
+  });
+  app.post("/internal/v1/github/issue-lifecycles", async (context) => {
+    const token = bearer(context.req.header("authorization"));
+    if (!token) return context.json({ error: "Unauthorized" }, 401);
+    const parsed = z.object({ executionId: z.string().min(1).max(255), repositoryId: z.number().int().positive() }).strict()
+      .safeParse(await context.req.json().catch(() => undefined));
+    if (!parsed.success) return context.json({ error: "Invalid request" }, 400);
+    try {
+      return context.json(await store.listGitHubIssueLifecycles({ ...parsed.data, tenantId: "default", fencingToken: token }), 200);
+    } catch { return context.json({ error: "Lifecycle query rejected" }, 409); }
   });
 }
 

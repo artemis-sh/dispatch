@@ -3,6 +3,7 @@ import { createPrivateKey, createSign } from "node:crypto";
 
 type Config = {
   dispatchUrl: string;
+  eventType: string;
   appIdFile: string;
   defaultBranch: string;
   installationIdFile: string;
@@ -59,7 +60,7 @@ const event = {
   specversion: "1.0",
   id: runId,
   source: "urn:dispatch:bug-finder-cron",
-  type: "dev.dispatch.repository.full_review.requested",
+  type: config.eventType,
   datacontenttype: "application/json",
   subject: `repositories/${config.repositoryId}`,
   time: new Date().toISOString(),
@@ -124,6 +125,7 @@ function readConfig(env: NodeJS.ProcessEnv): Config {
   }
   return {
     dispatchUrl: dispatchUrl.toString(),
+    eventType: env.SCHEDULED_AGENT_EVENT_TYPE?.trim() || "dev.dispatch.repository.full_review.requested",
     appIdFile: required(env, "BUG_FINDER_GITHUB_APP_ID_FILE"),
     defaultBranch: required(env, "BUG_FINDER_DEFAULT_BRANCH"),
     installationIdFile: required(env, "BUG_FINDER_GITHUB_INSTALLATION_ID_FILE"),

@@ -39,6 +39,52 @@ definition:
   retention: { sandboxSecondsAfterFinished: 0 }
   timeoutSeconds: 1800
 ---
+# project-maintenance
+version: 1
+definition:
+  schemaVersion: 1
+  runtime:
+    type: opencode
+    agent: maintain
+    opencodeConfig:
+      model: gateway/gpt-5.6-terra
+      mcp:
+        github: { type: remote, url: "http://127.0.0.1:8083/", enabled: true, oauth: false }
+      permission: { "github_*": deny, task: deny }
+      agent:
+        maintain:
+          prompt: >-
+            This is an hourly project-maintenance pass. First call github_dispatch_issue_lifecycles and treat its
+            durable Dispatch state as authoritative. Never reroute an issue whose latest execution is QUEUED,
+            PROVISIONING, RUNNING, RETRY_WAIT, WAITING, or has a REGISTERED, REPORTED, or CONFIRMED PR effect. Complete
+            at most one recovery transaction per pass. A stale routed issue with no active execution or PR effect may
+            be recovered by removing and reapplying its one existing difficulty label. If its latest error is
+            MISSING_REQUIRED_GITHUB_PR_EFFECT, retry only while missingPrEffectFailures is less than 2. At 2 or more,
+            do not reroute it again; leave one concise escalation comment containing the failure count and required
+            human investigation. For an unlabelled issue needing classification, apply only triage. If no issue recovery
+            is eligible, inspect open pull requests and call github_label_pull_request_for_review for at most one open,
+            non-draft PR with completed successful required checks and no current review verdict. Alternatively, leave
+            one evidence-based follow-up comment. Never change code, branches, pull request content, reviews, or merges,
+            and never take a second recovery action in the same pass. Defer all other work to the next hourly pass.
+          permission:
+            github_search_issues: allow
+            github_issue_read: allow
+            github_pull_request_read: allow
+            github_add_issue_comment: allow
+            github_issue_write: allow
+            github_get_label: allow
+            github_list_label: allow
+            github_dispatch_issue_lifecycles: allow
+            github_label_pull_request_for_review: allow
+            github_actions_list: allow
+            github_actions_get: allow
+            github_get_job_logs: allow
+  sandbox: { templateName: opencode-triager-template, warmPool: opencode-triager-pool }
+  connections: [{ id: github-production, sidecar: github-token-broker }]
+  permissions: { onRequest: fail }
+  retention: { sandboxSecondsAfterFinished: 0 }
+  timeoutSeconds: 900
+---
 version: 1
 definition:
   schemaVersion: 1
@@ -81,8 +127,13 @@ definition:
       agent:
         develop:
           prompt: >-
-            Implement the issue, verify the change, and create the branch, push files, and open the pull request only through GitHub MCP tools.
-            Do not use local git credentials, gh, or a shell-based GitHub workflow. Do not report success until the GitHub MCP pull-request creation call succeeds.
+            Implement the issue and complete this required GitHub MCP workflow: (1) create the branch with
+            github_create_branch, (2) edit and verify files in the local checkout, (3) commit selected modified files
+            from the checkout with github_push_workspace_files, and (4) open the pull request with
+            github_create_pull_request. A created branch or local implementation is incomplete. Do not use local git
+            credentials, gh, github_push_files for large existing files, or a shell-based GitHub workflow. Do not
+            finish or report success until github_create_pull_request succeeds. If a tool fails, report the exact
+            failed step rather than claiming completion.
           permission:
             github_issue_read: allow
             github_get_file_contents: allow
@@ -91,6 +142,7 @@ definition:
             github_list_commits: allow
             github_create_branch: allow
             github_push_files: allow
+            github_push_workspace_files: allow
             github_create_pull_request: allow
             github_pull_request_read: allow
             github_actions_list: allow

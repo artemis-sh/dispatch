@@ -2,3 +2,7 @@
 id: bug-finder-cron
 type: cloudevents.http
 config: { schemaVersion: 1 }
+---
+id: project-maintenance-cron
+type: cloudevents.http
+config: { schemaVersion: 1 }

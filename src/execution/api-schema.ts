@@ -26,6 +26,9 @@ const githubTools = new Set([
   "add_reply_to_pull_request_comment", "create_branch", "create_pull_request", "get_commit",
   "get_file_contents", "get_job_logs", "get_label", "issue_read", "issue_write", "list_commits",
   "list_label", "merge_pull_request", "pull_request_read", "pull_request_review_write", "push_files", "search_code", "search_issues",
+  "push_workspace_files",
+  "dispatch_issue_lifecycles",
+  "label_pull_request_for_review",
 ]);
 const profileConnectionSchema = z
   .object({

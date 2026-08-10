@@ -87,6 +87,10 @@ export function parseStartupConfig(env = process.env) {
       executionId: required(env, "DISPATCH_EXECUTION_ID"),
       token: required(env, "DISPATCH_EFFECT_TOKEN"),
     }) : undefined,
+    workspace: env.DISPATCH_WORKSPACE_GIT_COMMIT ? Object.freeze({
+      baseCommit: required(env, "DISPATCH_WORKSPACE_GIT_COMMIT"),
+      directory: path(env, "DISPATCH_WORKSPACE_DIRECTORY", "/workspace"),
+    }) : undefined,
     credentialPaths: Object.freeze({
       appId: path(env, "DISPATCH_GITHUB_APP_ID_FILE", DEFAULT_CREDENTIAL_PATHS.appId),
       installationId: path(env, "DISPATCH_GITHUB_INSTALLATION_ID_FILE", DEFAULT_CREDENTIAL_PATHS.installationId),

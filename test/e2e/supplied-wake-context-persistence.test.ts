@@ -99,6 +99,25 @@ describe("supplied wake context persistence", () => {
     await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
   });
 
+  it("does not deliver an easy review wake to a medium developer lifecycle", async () => {
+    const executionId = await createDeveloper({ waitName: "developer-medium-pr-lifecycle" });
+    await publishReviewBinding("developer-easy-pr-lifecycle");
+    const review = admissionCommand("work.review", {
+      repository: { id: 7 }, pullRequest: { number: 52, head: { sha: "c".repeat(40), repository: { cloneUrl: "https://github.com/acme/repo.git" } } },
+    });
+
+    await store.admitEvent(review);
+    await store.bindExecutionWakeContextValue({
+      authorityId: "effect-52", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
+      executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 52, waitName: "developer-medium-pr-lifecycle",
+    });
+    await runDeveloperToCompletion(executionId);
+
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+    await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
+  });
+
   it("binds the developer only after a reported effect matches a persisted PR event", async () => {
     const executionId = await createDeveloper();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: `effect-worker-${randomUUID()}`, leaseDurationMs: 60_000 });
@@ -143,13 +162,13 @@ describe("supplied wake context persistence", () => {
     await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
   });
 
-  async function createDeveloper(options: { requireGitHubPullRequestEffect?: boolean } = {}): Promise<string> {
+  async function createDeveloper(options: { requireGitHubPullRequestEffect?: boolean; waitName?: string } = {}): Promise<string> {
     const id = randomUUID();
     await store.publishBindingVersion({
       bindingId: `developer-${id}`, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(), profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
       definition: {
         schemaVersion: 1, eventTypes: ["work.start"], filter: { all: [{ path: "/key", op: "eq", value: id }] }, prompt: { literal: "Develop.", includeEvent: "data" }, workspace: { type: "empty" },
-        afterTurn: { disposition: "wait", wait: { name: "developer-pr-lifecycle", correlation: [
+        afterTurn: { disposition: "wait", wait: { name: options.waitName ?? "developer-pr-lifecycle", correlation: [
           { name: "repositoryId", source: "event", path: "/repository/id" },
           { name: "pullRequestNumber", source: "supplied", slot: "primaryPullRequestNumber" },
         ], deadlineSeconds: 600, admitWhileBusy: true } },
@@ -159,12 +178,12 @@ describe("supplied wake context persistence", () => {
     return (await store.admitEvent(admissionCommand("work.start", { key: id, repository: { id: 7, fullName: "acme/repo" } }))).executions[0]!.id;
   }
 
-  async function publishReviewBinding(): Promise<void> {
+  async function publishReviewBinding(waitName = "developer-pr-lifecycle"): Promise<void> {
     const id = randomUUID();
     await store.publishBindingVersion({
       bindingId: `review-${id}`, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(), profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
       definition: { schemaVersion: 1, disposition: "wake", eventTypes: ["work.review"], filter: { all: [] }, wake: {
-        waitName: "developer-pr-lifecycle", delivery: "active-or-coalesced", correlation: [
+        waitName, delivery: "active-or-coalesced", correlation: [
           { name: "repositoryId", path: "/repository/id" }, { name: "pullRequestNumber", path: "/pullRequest/number" },
         ], action: { type: "continue", prompt: { literal: "Address review.", includeEvent: "data" }, workspace: {
           type: "git", repository: { url: { path: "/pullRequest/head/repository/cloneUrl" } }, revision: { commit: { path: "/pullRequest/head/sha" } },
