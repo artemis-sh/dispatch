@@ -96,7 +96,9 @@ describe("GitHub webhook API", () => {
       subject: "issues/7",
       data: { comment: { id: 30, body: "Continue" } },
     });
-    expect(store.lastAdmission).not.toHaveProperty("revisionResolution");
+    expect(store.lastAdmission).toMatchObject({
+      revisionResolution: { installationId: 10, repositoryId: 20, branch: "main" },
+    });
   });
 
   it("admits completed workflow runs for exact pull request revisions", async () => {
@@ -108,7 +110,9 @@ describe("GitHub webhook API", () => {
       subject: "pulls/7",
       data: { workflowRun: { name: "CI", conclusion: "success", headSha: "a".repeat(40) }, pullRequest: { number: 7 } },
     });
-    expect(store.lastAdmission).not.toHaveProperty("revisionResolution");
+    expect(store.lastAdmission).toMatchObject({
+      revisionResolution: { installationId: 10, repositoryId: 20, branch: "main" },
+    });
   });
 
   it("replays the same delivery, conflicts on changed normalized payload, and permits disabled replay", async () => {

@@ -101,7 +101,7 @@ export function mountGitHubWebhookApi(
     }
     if (!event) return trigger.enabled ? context.body(null, 204) : context.json({ error: "Trigger not found" }, 404);
 
-    const revisionResolution = eventName === "issues" ? githubRevisionResolution(event.data) : undefined;
+    const revisionResolution = githubRevisionResolution(event.data);
     const githubIssueAcknowledgment = issueAcknowledgmentEnabled
       && (event.type === "com.github.issues.opened" || event.type === "com.github.pull_request.opened")
       ? issueAcknowledgment(event.data, event.type === "com.github.issues.opened" ? "issue" : "pullRequest")

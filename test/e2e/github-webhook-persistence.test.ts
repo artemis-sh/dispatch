@@ -82,6 +82,28 @@ describe("GitHub webhook persistence", () => {
       triggerId: TRIGGER_ID,
       version: 1,
     });
+    await store.publishBindingVersion({
+      bindingId: "github-default-branch-review",
+      createdAt,
+      definition: {
+        eventTypes: ["com.github.pull_request.synchronize"],
+        filter: { all: [] },
+        prompt: { includeEvent: "data", literal: "Review the default branch workspace" },
+        schemaVersion: 1,
+        workspace: {
+          type: "git",
+          repository: { url: { path: "/repository/cloneUrl" } },
+          revision: { commit: { path: "/repository/defaultBranchRevision/commit" } },
+        },
+      },
+      disabledAt: null,
+      enabled: true,
+      id: randomUUID(),
+      profile: { id: "github-reviewer", version: 1 },
+      tenantId: "default",
+      triggerId: TRIGGER_ID,
+      version: 1,
+    });
 
     expect(await store.getProfileVersion("default", "github-reviewer", 1)).toEqual(profileVersion);
     expect(await store.getTrigger("default", TRIGGER_ID)).toEqual(trigger);
@@ -98,6 +120,14 @@ describe("GitHub webhook persistence", () => {
     const payload = pullRequestPayload();
     const raw = JSON.stringify(payload);
     expect((await webhook(app, delivery, raw)).status).toBe(202);
+    expect(await store.claimRevisionResolution({
+      leaseOwner: "resolver",
+      leaseDurationMs: 60_000,
+    })).toMatchObject({
+      installationId: 44,
+      repositoryId: 10,
+      branch: "main",
+    });
 
     const first = await persistedAdmission();
     const expectedPayloadHash = createHash("sha256").update(raw).digest("hex");
