@@ -469,6 +469,42 @@ describe("dispatcher persistence", () => {
     expect(persisted.attempts[0]).toMatchObject({ state: "FAILED", lease_owner: null, lease_expires_at: null });
   });
 
+  it("authorizes leased timeout transitions with the database deadline", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution to be claimed");
+    const timeoutCommand = {
+      actor: "dispatcher-a",
+      attempt: claimed.lease.attempt,
+      executionId,
+      expectedAttemptState: "LEASED" as const,
+      expectedExecutionState: "PROVISIONING" as const,
+      fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner,
+      reason: "worker clock reports deadline elapsed",
+      targetAttemptState: "TIMED_OUT" as const,
+      targetExecutionState: "TIMED_OUT" as const,
+      tenantId: "default",
+    };
+    const before = await executionSnapshot(executionId);
+
+    await expect(store.transitionLeasedExecution(timeoutCommand)).resolves.toEqual({
+      applied: false,
+      reason: "DEADLINE_NOT_ELAPSED",
+    });
+    expect(await executionSnapshot(executionId)).toEqual(before);
+
+    await pool.query(
+      "update dispatch_executions set timeout_at = clock_timestamp() - interval '1 second' where id = $1",
+      [executionId],
+    );
+    await expect(store.transitionLeasedExecution(timeoutCommand)).resolves.toEqual({
+      applied: true,
+      attemptState: "TIMED_OUT",
+      executionState: "TIMED_OUT",
+    });
+  });
+
   it("rejects a stale fence without mutating execution history", async () => {
     const executionId = await queueExecution();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });

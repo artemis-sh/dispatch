@@ -2178,8 +2178,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const executionResult = await client.query<{ state: string }>({
-        text: `SELECT state FROM dispatch_executions WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      const executionResult = await client.query<{ state: string; timeout_at: Date }>({
+        text: `SELECT state, timeout_at FROM dispatch_executions WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
         values: [command.executionId, command.tenantId],
       });
       if (!executionResult.rows[0]) {
@@ -2224,6 +2224,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       if (!now || attempt.lease_expires_at <= now) {
         await client.query("ROLLBACK");
         return { applied: false, reason: "LEASE_EXPIRED" };
+      }
+      if ((command.targetAttemptState === "TIMED_OUT" || command.targetExecutionState === "TIMED_OUT")
+        && executionResult.rows[0].timeout_at > now) {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "DEADLINE_NOT_ELAPSED" };
       }
 
       const terminalAttempt = TERMINAL_ATTEMPT_STATES.has(command.targetAttemptState);

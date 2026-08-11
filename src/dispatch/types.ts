@@ -78,7 +78,7 @@ export type TransitionLeasedExecutionResult =
     }
   | {
       applied: false;
-      reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED";
+      reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED" | "DEADLINE_NOT_ELAPSED";
     };
 
 export type CheckpointLeasedExecutionAttemptDiagnosticCommand = {
