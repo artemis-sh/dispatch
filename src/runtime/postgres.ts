@@ -1134,6 +1134,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       );
       if (existing.rows[0]) {
         if (existing.rows[0].request_hash !== command.requestHash) throw new IdempotencyConflictError();
+        await client.query(`UPDATE dispatch_github_pull_request_effects SET fence_hash=$3,attempted_at=$4
+          WHERE tenant_id=$1 AND id=$2`, [command.tenantId, existing.rows[0].id, hashCanonicalJson(command.fencingToken), new Date(command.registeredAt)]);
         await client.query("COMMIT");
         return { created: false, id: existing.rows[0].id, state: existing.rows[0].state };
       }
@@ -1189,8 +1191,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       await client.query("BEGIN");
       const effect = await client.query<{ fence_hash: string; github_pull_request_id: string | null; pull_request_number: number | null; pull_request_url: string | null; repository_full_name: string; state: string }>(`SELECT effect.*
         FROM dispatch_github_pull_request_effects effect
-        WHERE effect.tenant_id=$1 AND effect.id=$2 AND effect.execution_id=$3 FOR UPDATE`,
-      [command.tenantId, command.effectId, command.executionId]);
+        JOIN dispatch_execution_attempts attempt ON attempt.execution_id=effect.execution_id AND attempt.tenant_id=effect.tenant_id
+        WHERE effect.tenant_id=$1 AND effect.id=$2 AND effect.execution_id=$3 AND attempt.fencing_token=$4
+          AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
+        FOR UPDATE OF effect`,
+      [command.tenantId, command.effectId, command.executionId, command.fencingToken]);
       const row = effect.rows[0];
       if (!row || row.fence_hash !== hashCanonicalJson(command.fencingToken)) throw new Error("Execution effect capability is invalid");
       validateGitHubPullRequestUrl(command.pullRequestUrl, row.repository_full_name, command.pullRequestNumber);
