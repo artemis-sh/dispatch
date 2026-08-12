@@ -599,6 +599,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           String(revisionResolution.repositoryId), revisionResolution.repositoryFullName, revisionResolution.cloneUrl,
           revisionResolution.branch, new Date(command.admittedAt),
         ]);
+        await client.query(`INSERT INTO dispatch_event_revision_resolution_candidates
+          (event_id, tenant_id, binding_version_id)
+          SELECT $1, $2, candidate.id FROM unnest($3::text[]) AS candidate(id)`, [
+          command.internalEventId, command.tenantId, resolutionCandidates.map((row) => row.id),
+        ]);
       }
       const created = await this.createExecutions(client, command, requiresResolution
         ? candidates.rows.filter((row) => !resolutionCandidates.includes(row))
@@ -677,11 +682,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       if (!eventRow) throw new Error("Revision resolution event disappeared");
       const candidates = await client.query<BindingProfileRow>(`SELECT binding.*, profile.definition AS profile_definition,
           profile.profile_id, profile.version AS profile_version
-        FROM dispatch_binding_versions AS binding
+        FROM dispatch_event_revision_resolution_candidates AS candidate
+        JOIN dispatch_binding_versions AS binding
+          ON binding.id = candidate.binding_version_id AND binding.tenant_id = candidate.tenant_id
         JOIN dispatch_agent_profile_versions AS profile ON profile.id = binding.profile_version_id AND profile.tenant_id = binding.tenant_id
-        WHERE binding.tenant_id = $1 AND binding.trigger_id = $2 AND binding.enabled AND $3 = ANY(binding.event_types)
+        WHERE candidate.event_id = $1 AND candidate.tenant_id = $2
         ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
-      [input.tenantId, eventRow.trigger_id, eventRow.type]);
+      [input.eventId, input.tenantId]);
       const event = eventFromRow(eventRow);
       const data = event.data as Record<string, JsonValue>;
       const repository = data.repository;
