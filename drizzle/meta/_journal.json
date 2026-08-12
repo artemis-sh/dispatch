@@ -127,6 +127,13 @@
       "when": 1786200000000,
       "tag": "0017_schedule_terminal_lease_clock",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786524000000,
+      "tag": "0018_revision_resolution_candidates",
+      "breakpoints": true
     }
   ]
 }

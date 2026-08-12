@@ -224,6 +224,27 @@ export const eventRevisionResolutions = pgTable("dispatch_event_revision_resolut
     .where(sql`${table.state} IN ('PENDING', 'RETRY_WAIT', 'LEASED')`),
 ]);
 
+export const eventRevisionResolutionCandidates = pgTable("dispatch_event_revision_resolution_candidates", {
+  bindingVersionID: text("binding_version_id").notNull(),
+  eventID: text("event_id").notNull(),
+  tenantID: text("tenant_id").notNull(),
+}, (table) => [
+  primaryKey({
+    columns: [table.eventID, table.tenantID, table.bindingVersionID],
+    name: "dispatch_event_revision_resolution_candidates_pk",
+  }),
+  foreignKey({
+    columns: [table.eventID, table.tenantID],
+    foreignColumns: [eventRevisionResolutions.eventID, eventRevisionResolutions.tenantID],
+    name: "dispatch_event_revision_resolution_candidates_resolution_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.bindingVersionID, table.tenantID],
+    foreignColumns: [bindingVersions.id, bindingVersions.tenantID],
+    name: "dispatch_event_revision_resolution_candidates_binding_fk",
+  }),
+]);
+
 export const executions = pgTable("dispatch_executions", {
   availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
   activeSingletonKey: text("active_singleton_key"),

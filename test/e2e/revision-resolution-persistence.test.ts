@@ -83,6 +83,19 @@ describe("revision resolution persistence", () => {
 
     const claim = await store.claimRevisionResolution({ leaseOwner: "resolver-1", leaseDurationMs: 60_000 });
     expect(claim).toMatchObject({ eventId: internalEventId, installationId: 44, repositoryId: 10, branch: "main", attempt: 1 });
+    await store.publishBindingVersion({
+      bindingId: "late-develop-issue", createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(),
+      tenantId, triggerId, version: 1, profile: { id: "developer", version: 1 },
+      definition: {
+        schemaVersion: 1, eventTypes: ["com.github.issues.opened"], filter: { all: [] },
+        prompt: { literal: "Late develop", includeEvent: "data" },
+        workspace: {
+          type: "git", repository: { url: { path: "/repository/cloneUrl" } },
+          revision: { commit: { path: "/repository/defaultBranchRevision/commit" } },
+        },
+      },
+    });
+    await store.disableBindingVersion(tenantId, "develop-issue", 1, new Date().toISOString());
     expect(await store.completeRevisionResolution({
       eventId: internalEventId, tenantId, leaseOwner: "stale", leaseToken: claim!.leaseToken,
       commit: "a".repeat(40), resolvedAt: new Date().toISOString(),
