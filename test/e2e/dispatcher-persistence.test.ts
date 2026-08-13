@@ -663,6 +663,28 @@ describe("dispatcher persistence", () => {
     });
   });
 
+  it("times out a queued execution whose deadline elapsed before it was claimed", async () => {
+    const executionId = await queueExecution();
+    await pool.query(
+      "update dispatch_executions set timeout_at = now() - interval '1 second' where id = $1",
+      [executionId],
+    );
+
+    expect(await store.claimNextQueuedExecution({ leaseOwner: "dispatcher", leaseDurationMs: 60_000 })).toBeUndefined();
+    expect(await store.promoteDueExecutionRetries({ limit: 10 })).toEqual([
+      expect.objectContaining({ executionId, executionState: "TIMED_OUT" }),
+    ]);
+
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution).toMatchObject({ state: "TIMED_OUT" });
+    expect(persisted.execution.completed_at).toBeInstanceOf(Date);
+    expect(persisted.transitions.at(-1)).toMatchObject({
+      attempt: null,
+      from_state: "QUEUED",
+      to_state: "TIMED_OUT",
+    });
+  });
+
   it("immediately and idempotently cancels queued executions with ordered history", async () => {
     const executionId = await queueExecution();
     const requestedAt = new Date().toISOString();
