@@ -29,9 +29,9 @@
   "dependencies": {
     "@hono/node-server": "^2.1.0",
     "@hono/swagger-ui": "^0.6.1",
-    "@hono/zod-openapi": "^1.4.0",
+    "@hono/zod-openapi": "^1.5.2",
     "@kubernetes/client-node": "^1.4.0",
-    "@opencode-ai/sdk": "^1.18.16",
+    "@opencode-ai/sdk": "^1.18.18",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.1",
     "pg": "^8.23.0",
