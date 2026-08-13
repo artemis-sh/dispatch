@@ -2115,11 +2115,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         text: `
           WITH promotion_clock AS MATERIALIZED (SELECT clock_timestamp() AS promoted_at),
           candidates AS (
-            SELECT execution.id, execution.tenant_id
+            SELECT execution.id, execution.tenant_id, execution.state
             FROM dispatch_executions AS execution, promotion_clock
-            WHERE execution.state = 'RETRY_WAIT'
-              AND (execution.available_at <= promotion_clock.promoted_at
-                OR execution.timeout_at <= promotion_clock.promoted_at)
+            WHERE (execution.state = 'RETRY_WAIT'
+                AND (execution.available_at <= promotion_clock.promoted_at
+                  OR execution.timeout_at <= promotion_clock.promoted_at))
+              OR (execution.state = 'QUEUED'
+                AND execution.timeout_at <= promotion_clock.promoted_at)
             ORDER BY execution.available_at, execution.created_at, execution.id
             FOR UPDATE OF execution SKIP LOCKED
             LIMIT $1
@@ -2136,10 +2138,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
                 updated_at = promotion_clock.promoted_at
             FROM candidates, promotion_clock
             WHERE execution.id = candidates.id AND execution.tenant_id = candidates.tenant_id
-              AND execution.state = 'RETRY_WAIT'
-              AND (execution.available_at <= promotion_clock.promoted_at
-                OR execution.timeout_at <= promotion_clock.promoted_at)
-            RETURNING execution.id, execution.tenant_id, execution.state
+              AND execution.state = candidates.state
+              AND ((execution.state = 'RETRY_WAIT'
+                  AND (execution.available_at <= promotion_clock.promoted_at
+                    OR execution.timeout_at <= promotion_clock.promoted_at))
+                OR (execution.state = 'QUEUED'
+                  AND execution.timeout_at <= promotion_clock.promoted_at))
+            RETURNING execution.id, execution.tenant_id, execution.state, candidates.state AS previous_state
           ), inserted_transition AS (
             INSERT INTO dispatch_execution_transitions
               (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
@@ -2147,7 +2152,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
                    (SELECT COALESCE(MAX(sequence), 0) + 1
                     FROM dispatch_execution_transitions
                     WHERE tenant_id = execution.tenant_id AND execution_id = execution.id),
-                   'RETRY_WAIT', execution.state, 'execution-reconciler',
+                   execution.previous_state, execution.state, 'execution-reconciler',
                    CASE WHEN execution.state = 'TIMED_OUT' THEN 'execution deadline elapsed' ELSE 'execution retry became due' END,
                    promotion_clock.promoted_at
             FROM updated_execution AS execution, promotion_clock
@@ -2779,6 +2784,7 @@ type RecoveredExecutionRow = {
 
 type PromotedExecutionRow = {
   id: string;
+  previous_state: "QUEUED" | "RETRY_WAIT";
   promoted_at: Date;
   state: "QUEUED" | "TIMED_OUT";
   tenant_id: string;
