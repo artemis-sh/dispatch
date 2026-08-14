@@ -10,7 +10,10 @@ export type ExecutionLease = {
   leaseExpiresAt: Date;
 };
 
-export type ExecutionLeaseRenewalResult = "RENEWED" | "CANCEL_REQUESTED" | "LOST";
+export type ExecutionLeaseRenewalResult =
+  | { status: "RENEWED"; leaseExpiresAt: Date }
+  | "CANCEL_REQUESTED"
+  | "LOST";
 
 export type AcknowledgeLeasedExecutionCancellationCommand = {
   executionId: string;

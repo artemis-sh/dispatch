@@ -64,7 +64,13 @@ export function startExecutionLeaseHeartbeat(input: {
   const watchExpiry = (): void => {
     clearTimeout(expiryTimer);
     if (stopped || controller.signal.aborted) return;
-    expiryTimer = setTimeout(loseFence, Math.max(0, confirmedExpiry - Date.now()));
+    expiryTimer = setTimeout(() => {
+      expiryTimer = undefined;
+      // The renewal may already have committed remotely. Its response is the
+      // only authoritative evidence of whether this fence is still valid.
+      if (renewal !== undefined) return;
+      loseFence();
+    }, Math.max(0, confirmedExpiry - Date.now()));
   };
 
   const schedule = (): void => {
@@ -92,7 +98,10 @@ export function startExecutionLeaseHeartbeat(input: {
       if (result === "CANCEL_REQUESTED") requestCancellation();
       else if (result === "LOST") loseFence();
       else {
-        confirmedExpiry = Math.max(confirmedExpiry, Date.now() + input.leaseDurationMs);
+        confirmedExpiry = Math.max(
+          confirmedExpiry,
+          result.leaseExpiresAt.getTime(),
+        );
         watchExpiry();
       }
     } catch {

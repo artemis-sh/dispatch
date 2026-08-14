@@ -307,7 +307,10 @@ function workerFixture(overrides: { renew?: ExecutionLeaseRenewalResult } = {}) 
     acknowledgeLeasedExecutionCancellation: vi.fn().mockResolvedValue({ applied: true as const }),
     listRequestedCancellationCleanups: vi.fn().mockResolvedValue([]),
     finalizeRequestedExecutionCancellation: vi.fn().mockResolvedValue(undefined),
-    renewExecutionLease: vi.fn().mockResolvedValue(overrides.renew ?? "RENEWED"),
+    renewExecutionLease: vi.fn().mockResolvedValue(overrides.renew ?? {
+      status: "RENEWED",
+      leaseExpiresAt: new Date(Date.now() + 100),
+    }),
     completeLeasedExecutionTurn: vi.fn().mockResolvedValue({ applied: true as const, attemptState: "SUCCEEDED" as const, executionState: "SUCCEEDED" as const }),
     expireDueEventWaits: vi.fn().mockResolvedValue([]),
     transitionLeasedExecution: vi.fn(async (command: TransitionLeasedExecutionCommand): Promise<TransitionLeasedExecutionResult> => {
