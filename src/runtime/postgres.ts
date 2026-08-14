@@ -1705,7 +1705,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       `,
       values: [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, command.leaseDurationMs],
     });
-    if (result.rowCount === 1) return "RENEWED";
+    if (result.rowCount === 1) {
+      return { status: "RENEWED", leaseExpiresAt: result.rows[0]!.lease_expires_at };
+    }
 
     const cancellation = await this.pool.query<{ cancellation_requested: boolean }>({
       text: `

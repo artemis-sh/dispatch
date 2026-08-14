@@ -200,7 +200,7 @@ describe("dispatcher persistence", () => {
       fencingToken: claimed.lease.fencingToken,
       leaseOwner: claimed.lease.leaseOwner,
       leaseDurationMs: 120_000,
-    })).toBe("RENEWED");
+    })).toMatchObject({ status: "RENEWED", leaseExpiresAt: expect.any(Date) });
     expect(await store.renewExecutionLease({
       executionId,
       tenantId: "default",
@@ -398,7 +398,7 @@ describe("dispatcher persistence", () => {
       fencingToken: live.lease.fencingToken,
       leaseOwner: live.lease.leaseOwner,
       leaseDurationMs: 120_000,
-    })).toBe("RENEWED");
+    })).toMatchObject({ status: "RENEWED", leaseExpiresAt: expect.any(Date) });
     const incompleteExecutionId = await queueExecution();
     await startRunningExecution(incompleteExecutionId, "dispatcher-incomplete");
     await pool.query(
@@ -629,7 +629,7 @@ describe("dispatcher persistence", () => {
       fencingToken: claimed.lease.fencingToken,
       leaseOwner: claimed.lease.leaseOwner,
       leaseDurationMs: 120_000,
-    })).toBe("RENEWED");
+    })).toMatchObject({ status: "RENEWED", leaseExpiresAt: expect.any(Date) });
     const before = await executionSnapshot(executionId);
 
     expect(await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 3, retryDelayMs: 0 })).toEqual([]);
