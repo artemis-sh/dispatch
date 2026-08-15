@@ -66,9 +66,8 @@ export function startExecutionLeaseHeartbeat(input: {
     if (stopped || controller.signal.aborted) return;
     expiryTimer = setTimeout(() => {
       expiryTimer = undefined;
-      // The renewal may already have committed remotely. Its response is the
-      // only authoritative evidence of whether this fence is still valid.
-      if (renewal !== undefined) return;
+      // A pending renewal cannot extend the last confirmed lease expiry. The
+      // response is required before this worker can continue past that fence.
       loseFence();
     }, Math.max(0, confirmedExpiry - Date.now()));
   };
