@@ -430,7 +430,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
   async completeScheduleOccurrence(input: { id: string; leaseOwner: string; leaseToken: string; completedAt: string }): Promise<boolean> {
     const result = await this.pool.query(`UPDATE dispatch_schedule_occurrences SET state='SUCCEEDED', completed_at=$4,
       lease_owner=NULL, lease_token=NULL, lease_expires_at=NULL, last_error=NULL, updated_at=$4
-      WHERE id=$1 AND state='LEASED' AND lease_owner=$2 AND lease_token=$3 AND lease_expires_at>$4`,
+      WHERE id=$1 AND state='LEASED' AND lease_owner=$2 AND lease_token=$3 AND lease_expires_at>clock_timestamp()`,
     [input.id, input.leaseOwner, input.leaseToken, new Date(input.completedAt)]);
     return result.rowCount === 1;
   }
@@ -439,7 +439,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     const result = await this.pool.query(`UPDATE dispatch_schedule_occurrences SET
       state=CASE WHEN attempt >= $7 THEN 'DEAD_LETTERED' ELSE 'RETRY_WAIT' END, available_at=$6, last_error=$5,
       lease_owner=NULL, lease_token=NULL, lease_expires_at=NULL, updated_at=$4
-      WHERE id=$1 AND state='LEASED' AND lease_owner=$2 AND lease_token=$3 AND lease_expires_at>$4`,
+      WHERE id=$1 AND state='LEASED' AND lease_owner=$2 AND lease_token=$3 AND lease_expires_at>clock_timestamp()`,
     [input.id, input.leaseOwner, input.leaseToken, new Date(input.failedAt), input.error, new Date(input.retryAt), input.maxAttempts]);
     return result.rowCount === 1;
   }
