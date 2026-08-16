@@ -234,6 +234,36 @@ describe("revision resolution persistence", () => {
     expect(admitted.executions).toEqual([]);
     expect(await store.claimRevisionResolution({ leaseOwner: "resolver", leaseDurationMs: 60_000 })).toMatchObject({ eventId: internalEventId, installationId: 44, repositoryId: 10 });
   });
+
+  it("recovers the installation identity for an App-authored issue label recovery", async () => {
+    const tenantId = "default";
+    const triggerId = `trigger-${randomUUID()}`;
+    const admittedAt = new Date().toISOString();
+    await store.createTrigger({
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
+      createdAt: admittedAt, disabledAt: null, enabled: true, id: triggerId, tenantId, type: "github.app.webhook",
+    });
+    await store.publishProfileVersion({
+      createdAt: admittedAt,
+      definition: { schemaVersion: 1, runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } }, sandbox: { templateName: "opencode", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 3600 },
+      id: randomUUID(), profileId: "developer", tenantId, version: 1,
+    });
+    await store.publishBindingVersion({
+      bindingId: "develop-label", createdAt: admittedAt, disabledAt: null, enabled: true, id: randomUUID(), tenantId, triggerId, version: 1,
+      profile: { id: "developer", version: 1 },
+      definition: { schemaVersion: 1, eventTypes: ["com.github.issues.labeled"], filter: { all: [] }, prompt: { literal: "Develop", includeEvent: "data" }, workspace: { type: "git", repository: { url: { path: "/repository/cloneUrl" } }, revision: { commit: { path: "/repository/defaultBranchRevision/commit" } } } },
+    });
+    const repository = { id: 10, fullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", defaultBranch: "main", private: false };
+    const previous = { specversion: "1.0" as const, id: randomUUID(), source: "https://github.com/acme/widgets", type: "com.github.issues.opened", datacontenttype: "application/json", data: { schemaVersion: 1, installationId: 44, repository, issue: { number: 7 } } };
+    const recovery = { specversion: "1.0" as const, id: randomUUID(), source: "https://github.com/acme/widgets", type: "com.github.issues.labeled", datacontenttype: "application/json", data: { schemaVersion: 1, installationId: null, repository, issue: { number: 7 } } };
+    await store.admitEvent({ tenantId, triggerId, internalEventId: randomUUID(), event: previous, sourceDeduplicationKey: randomUUID(), admittedAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event: previous } as JsonValue) });
+    const internalEventId = randomUUID();
+    const admitted = await store.admitEvent({ tenantId, triggerId, internalEventId, event: recovery, sourceDeduplicationKey: randomUUID(), admittedAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event: recovery } as JsonValue) });
+    expect(admitted.executions).toEqual([]);
+    expect(await store.claimRevisionResolution({ leaseOwner: "resolver", leaseDurationMs: 60_000 })).toMatchObject({ eventId: internalEventId, installationId: 44, repositoryId: 10 });
+  });
 });
 
 async function startPostgres(): Promise<StartedTestContainer> {
