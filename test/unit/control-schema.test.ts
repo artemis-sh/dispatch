@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bindingDefinitionSchema, publishedBindingVersionSchema } from "../../src/control/binding.js";
+import { bindingDefinitionSchema, createBindingDefinitionSchema, publishedBindingVersionSchema } from "../../src/control/binding.js";
 import { triggerSchema } from "../../src/control/trigger.js";
 
 const validDefinition = {
@@ -125,6 +125,34 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, correlation: [{ name: "x", path: "/x" }, { name: "x", path: "/y" }] } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, deadlineSeconds: 0 } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, extra: true } } }).success).toBe(false);
+  });
+
+  it("requires a reconcilable lifecycle for GitHub pull request effects", () => {
+    const afterTurn = {
+      disposition: "wait",
+      wait: {
+        name: "developer-pr-lifecycle",
+        correlation: [{ name: "issue", path: "/issue/number" }],
+        deadlineSeconds: 3_600,
+      },
+    } as const;
+    const definition = { ...validDefinition, requireGitHubPullRequestEffect: true, afterTurn };
+
+    expect(() => createBindingDefinitionSchema.parse(definition)).toThrow(/admitWhileBusy|supplied|pull request effect/i);
+    expect(createBindingDefinitionSchema.safeParse({
+      ...definition,
+      afterTurn: {
+        ...afterTurn,
+        wait: {
+          ...afterTurn.wait,
+          admitWhileBusy: true,
+          correlation: [
+            { name: "issue", path: "/issue/number" },
+            { name: "pullRequestNumber", source: "supplied", slot: "primaryPullRequestNumber" },
+          ],
+        },
+      },
+    }).success).toBe(true);
   });
 
   it("accepts bounded active execution singleton keys on create bindings only", () => {
