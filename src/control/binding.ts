@@ -81,8 +81,18 @@ export const createBindingDefinitionSchema = z
     if (value.checkpoint && value.afterTurn) {
       context.addIssue({ code: "custom", message: "checkpoint bindings must be one-shot", path: ["checkpoint"] });
     }
-    if (value.requireGitHubPullRequestEffect && !value.afterTurn) {
-      context.addIssue({ code: "custom", message: "GitHub pull request effect requirement needs an afterTurn wait", path: ["requireGitHubPullRequestEffect"] });
+    if (value.requireGitHubPullRequestEffect) {
+      const wait = value.afterTurn?.wait;
+      if (!wait) {
+        context.addIssue({ code: "custom", message: "GitHub pull request effect requirement needs an afterTurn wait", path: ["requireGitHubPullRequestEffect"] });
+      } else {
+        if (wait.admitWhileBusy !== true) {
+          context.addIssue({ code: "custom", message: "GitHub pull request effect requirement needs admitWhileBusy", path: ["afterTurn", "wait", "admitWhileBusy"] });
+        }
+        if (!wait.correlation.some((item) => item.name === "pullRequestNumber" && item.source === "supplied" && item.slot === "primaryPullRequestNumber")) {
+          context.addIssue({ code: "custom", message: "GitHub pull request effect requirement needs the primaryPullRequestNumber supplied correlation", path: ["afterTurn", "wait", "correlation"] });
+        }
+      }
     }
   });
 
