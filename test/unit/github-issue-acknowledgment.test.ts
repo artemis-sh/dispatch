@@ -54,14 +54,14 @@ describe("GitHubIssueAcknowledgmentTransport", () => {
     expect(fetch.mock.calls[2]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ content: "eyes" }) });
   });
 
-  it("mints an issues-write token even for a pull request acknowledgment", async () => {
+  it("mints a pull-requests-write token for a pull request acknowledgment", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(Response.json({
         token: "ghs_token",
         expires_at: "2026-07-20T01:00:00Z",
         repository_selection: "selected",
         repositories: [{ id: 10 }],
-        permissions: { issues: "write", metadata: "read" },
+        permissions: { pull_requests: "write", metadata: "read" },
       }))
       .mockResolvedValueOnce(Response.json({ id: 10, full_name: "acme/widgets" }))
       .mockResolvedValueOnce(new Response("", { status: 201 }));
@@ -78,7 +78,7 @@ describe("GitHubIssueAcknowledgmentTransport", () => {
       payload: { ...envelope.payload, subjectType: "pull_request" as const },
     }, { signal: new AbortController().signal })).resolves.toBeUndefined();
     expect(fetch.mock.calls[0]![1]).toMatchObject({
-      body: JSON.stringify({ repository_ids: [10], permissions: { issues: "write" } }),
+      body: JSON.stringify({ repository_ids: [10], permissions: { pull_requests: "write" } }),
     });
     expect(fetch.mock.calls[2]![0]).toBe("https://api.github.com/repos/acme/widgets/issues/7/reactions");
   });
