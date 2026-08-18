@@ -741,7 +741,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       state = CASE WHEN attempt >= $7 THEN 'DEAD_LETTERED' ELSE 'RETRY_WAIT' END,
       available_at = $6, last_error = $5, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = $4
       WHERE event_id = $1 AND tenant_id = $2 AND state = 'LEASED' AND lease_owner = $3 AND lease_token = $8
-        AND lease_expires_at > $4`, [input.eventId, input.tenantId, input.leaseOwner, new Date(input.failedAt),
+        AND lease_expires_at > clock_timestamp()`, [input.eventId, input.tenantId, input.leaseOwner, new Date(input.failedAt),
       input.error, new Date(input.retryAt), input.maxAttempts, input.leaseToken]);
     return result.rowCount === 1;
   }
