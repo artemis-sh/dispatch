@@ -148,6 +148,31 @@ describe("supplied wake context persistence", () => {
     await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
   });
 
+  it("rejects PR effect registration and reporting after cancellation is requested", async () => {
+    const registrationExecutionId = await createDeveloper();
+    const registrationClaim = await store.claimNextQueuedExecution({ leaseOwner: `cancel-registration-${randomUUID()}`, leaseDurationMs: 60_000 });
+    if (!registrationClaim || registrationClaim.executionId !== registrationExecutionId) throw new Error("Expected developer claim");
+    await store.requestExecutionCancellation({ actor: "test", executionId: registrationExecutionId, reason: "cancel", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
+
+    const registration = { baseRef: "main", executionId: registrationExecutionId, fencingToken: registrationClaim.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
+      registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "PR", head: "feature", base: "main" }), tenantId: "default" };
+    await expect(store.registerGitHubPullRequestEffect(registration)).rejects.toThrow("Execution effect capability is not current");
+    expect((await pool.query("select count(*)::int as count from dispatch_github_pull_request_effects where execution_id=$1", [registrationExecutionId])).rows[0]).toEqual({ count: 0 });
+
+    const reportExecutionId = await createDeveloper();
+    const reportClaim = await store.claimNextQueuedExecution({ leaseOwner: `cancel-report-${randomUUID()}`, leaseDurationMs: 60_000 });
+    if (!reportClaim || reportClaim.executionId !== reportExecutionId) throw new Error("Expected developer claim");
+    const effect = await store.registerGitHubPullRequestEffect({ ...registration, executionId: reportExecutionId, fencingToken: reportClaim.lease.fencingToken });
+    await store.requestExecutionCancellation({ actor: "test", executionId: reportExecutionId, reason: "cancel", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
+
+    await expect(store.reportGitHubPullRequestEffect({ effectId: effect.id, executionId: reportExecutionId, fencingToken: reportClaim.lease.fencingToken,
+      githubPullRequestId: "9001", pullRequestNumber: 61, pullRequestUrl: "https://github.com/acme/repo/pull/61", reportedAt: new Date().toISOString(), tenantId: "default" }))
+      .rejects.toThrow("Execution effect capability is invalid");
+    expect((await pool.query("select state,github_pull_request_id,pull_request_number,pull_request_url from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0])
+      .toEqual({ state: "REGISTERED", github_pull_request_id: null, pull_request_number: null, pull_request_url: null });
+    await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
+  });
+
   it("recovers a registered effect from its exact signed PR event", async () => {
     const executionId = await createDeveloper();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: `recovery-worker-${randomUUID()}`, leaseDurationMs: 60_000 });

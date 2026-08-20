@@ -1129,6 +1129,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
         JOIN dispatch_events event ON event.id=execution.event_id AND event.tenant_id=execution.tenant_id
         WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+          AND execution.state IN ('PROVISIONING','RUNNING')
           AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
         FOR UPDATE OF execution`, [command.tenantId, command.executionId, command.fencingToken]);
       if (!execution.rows[0]) throw new Error("Execution effect capability is not current");
@@ -1199,7 +1200,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const effect = await client.query<{ fence_hash: string; github_pull_request_id: string | null; pull_request_number: number | null; pull_request_url: string | null; repository_full_name: string; state: string }>(`SELECT effect.*
         FROM dispatch_github_pull_request_effects effect
         JOIN dispatch_execution_attempts attempt ON attempt.execution_id=effect.execution_id AND attempt.tenant_id=effect.tenant_id
+        JOIN dispatch_executions execution ON execution.id=effect.execution_id AND execution.tenant_id=effect.tenant_id
         WHERE effect.tenant_id=$1 AND effect.id=$2 AND effect.execution_id=$3 AND attempt.fencing_token=$4
+          AND execution.state IN ('PROVISIONING','RUNNING')
           AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
         FOR UPDATE OF effect`,
       [command.tenantId, command.effectId, command.executionId, command.fencingToken]);
