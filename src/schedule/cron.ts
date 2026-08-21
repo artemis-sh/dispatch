@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const FIELD_RANGES = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]] as const;
+const DAY_OF_WEEK_PARSE_MAXIMUM = 7;
 
 export const cronExpressionSchema = z.string().min(9).max(128).superRefine((value, context) => {
   try {
@@ -41,7 +42,11 @@ function parseCronExpression(expression: string): {
   if (parts.length !== 5) throw new Error("cron expression must contain five fields");
   const fields = parts.map((part, index) => {
     const range = FIELD_RANGES[index]!;
-    return parseField(part!, range[0], range[1]);
+    const maximum = index === 4 ? DAY_OF_WEEK_PARSE_MAXIMUM : range[1];
+    const values = parseField(part!, range[0], maximum);
+    return index === 4
+      ? new Set([...values].map((value) => value === 7 ? 0 : value))
+      : values;
   }) as [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
   return {
     fields,
