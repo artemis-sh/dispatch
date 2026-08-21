@@ -9,6 +9,11 @@ describe("schedule cron", () => {
     expect(nextCronOccurrence("0 0 1 * 1", new Date("2026-07-20T00:00:00Z")).toISOString()).toBe("2026-07-27T00:00:00.000Z");
   });
 
+  it("accepts 7 as the standard Sunday alias", () => {
+    expect(nextCronOccurrence("0 9 * * 7", new Date("2026-08-21T12:00:00.000Z")))
+      .toEqual(new Date("2026-08-23T09:00:00.000Z"));
+  });
+
   it("treats full-range day fields as wildcards in day matching", () => {
     const after = new Date("2026-07-21T00:00:00Z");
     expect(nextCronOccurrence("0 0 */1 * 1", after).toISOString()).toBe("2026-07-27T00:00:00.000Z");
@@ -17,7 +22,7 @@ describe("schedule cron", () => {
     expect(nextCronOccurrence("0 0 1 * 0-6", after).toISOString()).toBe("2026-08-01T00:00:00.000Z");
   });
 
-  it.each(["* * *", "60 * * * *", "*/0 * * * *", "* 24 * * *", "* * 0 * *", "* * * * 7", "a * * * *"])(
+  it.each(["* * *", "60 * * * *", "*/0 * * * *", "* 24 * * *", "* * 0 * *", "* * * * 8", "a * * * *"])(
     "rejects invalid expression %s", (expression) => expect(cronExpressionSchema.safeParse(expression).success).toBe(false),
   );
 });
