@@ -5,7 +5,10 @@ const DAY_OF_WEEK_PARSE_MAXIMUM = 7;
 
 export const cronExpressionSchema = z.string().min(9).max(128).superRefine((value, context) => {
   try {
-    parseCronExpression(value);
+    const parsed = parseCronExpression(value);
+    if (!hasCalendarOccurrence(parsed)) {
+      context.addIssue({ code: "custom", message: "cron expression has no calendar occurrence" });
+    }
   } catch (error) {
     context.addIssue({ code: "custom", message: String(error) });
   }
@@ -61,6 +64,19 @@ function spansEntireRange(values: Set<number>, minimum: number, maximum: number)
     if (!values.has(value)) return false;
   }
   return true;
+}
+
+function hasCalendarOccurrence({ fields, dayOfWeekWildcard }: {
+  fields: [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
+  dayOfWeekWildcard: boolean;
+}): boolean {
+  if (!dayOfWeekWildcard) return true;
+  return [...fields[3]].some((month) => [...fields[2]].some((day) => day <= daysInMonth(month)));
+}
+
+function daysInMonth(month: number): number {
+  if (month === 2) return 29;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
 }
 
 function parseField(field: string, minimum: number, maximum: number): Set<number> {

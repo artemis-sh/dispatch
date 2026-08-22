@@ -25,4 +25,8 @@ describe("schedule cron", () => {
   it.each(["* * *", "60 * * * *", "*/0 * * * *", "* 24 * * *", "* * 0 * *", "* * * * 8", "a * * * *"])(
     "rejects invalid expression %s", (expression) => expect(cronExpressionSchema.safeParse(expression).success).toBe(false),
   );
+
+  it("rejects expressions with no calendar occurrence", () => {
+    expect(cronExpressionSchema.safeParse("0 0 31 2 *").success).toBe(false);
+  });
 });
