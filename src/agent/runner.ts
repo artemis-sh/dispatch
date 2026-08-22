@@ -85,11 +85,22 @@ export async function observeExecutionAttempt(
       signal: input.signal,
       throwOnError: true,
     }));
-    const status = parseSessionStatus(statuses, sessionId);
+    let status = parseSessionStatus(statuses, sessionId);
 
     if (status === "busy" || status === "retry") {
       const iterator = events.stream[Symbol.asyncIterator]();
+      // The session may become idle after the initial status read but before
+      // consumption begins. Reconcile after installing the iterator so an
+      // adopted session does not wait forever for an idle event already past
+      // the live subscription.
+      const { data: updatedStatuses } = await raceAbort(client.session.status({
+        signal: input.signal,
+        throwOnError: true,
+      }));
+      status = parseSessionStatus(updatedStatuses, sessionId);
+
       while (true) {
+        if (status === "idle") break;
         const next = await raceAbort(iterator.next());
         if (next.done) throw new Error(`opencode event stream ended before session ${sessionId} became idle`);
 

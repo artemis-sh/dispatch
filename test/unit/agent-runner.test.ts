@@ -202,7 +202,22 @@ describe("observeExecutionAttempt", () => {
 
     await expect(observeExecutionAttempt({ endpoint, sessionId: "session-1" }, client))
       .resolves.toEqual({ output: "final output", sessionId: "session-1" });
-    expect(calls).toEqual(["get", "subscribe", "status", "messages"]);
+    expect(calls).toEqual(["get", "subscribe", "status", "status", "messages"]);
+  });
+
+  it("rechecks an adopted session that becomes idle after the busy status", async () => {
+    const client = existingSessionClient({
+      events: [],
+      messages: [userMessage("session-1"), assistantMessage("session-1", ["completed before observation"])],
+      status: { "session-1": { type: "busy" } },
+    });
+    vi.mocked(client.session.status)
+      .mockResolvedValueOnce({ data: { "session-1": { type: "busy" } } } as never)
+      .mockResolvedValue({ data: { "session-1": { type: "idle" } } } as never);
+
+    await expect(observeExecutionAttempt({ endpoint, sessionId: "session-1" }, client))
+      .resolves.toEqual({ output: "completed before observation", sessionId: "session-1" });
+    expect(client.session.status).toHaveBeenCalledTimes(2);
   });
 
   it("rejects an idle session without a persisted prompt exchange", async () => {
