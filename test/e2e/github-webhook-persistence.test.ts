@@ -114,11 +114,16 @@ describe("GitHub webhook persistence", () => {
     expect(persistedTrigger.config).toEqual({ schemaVersion: 1, webhookSecretEnv: SECRET_ENV });
     expect(persistedTrigger.config_text).not.toContain(SECRET);
 
-    const app = createOpenApiApp();
-    mountGitHubWebhookApi(app, store, (name) => name === SECRET_ENV ? SECRET : undefined);
+    const disabledResolverApp = createOpenApiApp();
+    mountGitHubWebhookApi(disabledResolverApp, store, (name) => name === SECRET_ENV ? SECRET : undefined);
     const delivery = "fork-delivery-1";
     const payload = pullRequestPayload();
     const raw = JSON.stringify(payload);
+    expect((await webhook(disabledResolverApp, delivery, raw)).status).toBe(422);
+    expect(await persistedAdmission()).toEqual({ events: [], executions: [] });
+
+    const app = createOpenApiApp();
+    mountGitHubWebhookApi(app, store, (name) => name === SECRET_ENV ? SECRET : undefined, undefined, false, true);
     expect((await webhook(app, delivery, raw)).status).toBe(202);
     expect(await store.claimRevisionResolution({
       leaseOwner: "resolver",

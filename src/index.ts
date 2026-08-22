@@ -143,7 +143,7 @@ const metricsApp = createOpenApiApp();
 mountHealthRoute(app);
 mountMetricsRoute(metricsApp, metricsRegistry);
 mountControlApi(app, config, runtimeStore);
-mountGitHubWebhookApi(app, runtimeStore, undefined, undefined, config.githubIssueAcknowledgmentEnabled);
+mountGitHubWebhookApi(app, runtimeStore, undefined, undefined, config.githubIssueAcknowledgmentEnabled, config.revisionResolverEnabled);
 mountGitHubEffectsApi(app, runtimeStore);
 mountOpenApiDocs(app);
 
