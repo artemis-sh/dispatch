@@ -34,6 +34,7 @@ export function mountGitHubWebhookApi(
   readEnvironmentVariable: (name: string) => string | undefined = (name) => process.env[name],
   verifySignature: typeof verifyGitHubSignature = verifyGitHubSignature,
   issueAcknowledgmentEnabled = false,
+  revisionResolverEnabled = false,
 ): void {
   app.use("/hooks/github/:triggerID", bodyLimit({
     maxSize: MAX_BODY_BYTES,
@@ -115,6 +116,7 @@ export function mountGitHubWebhookApi(
       admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: triggerID, event } as JsonValue),
       admittedAt: new Date().toISOString(),
       ...(revisionResolution ? { revisionResolution } : {}),
+      revisionResolverEnabled,
       ...(githubIssueAcknowledgment ? { githubIssueAcknowledgment } : {}),
     });
     if (eventName === "pull_request" && event.type === "com.github.pull_request.opened" && "reconcileGitHubPullRequestEffects" in store) {

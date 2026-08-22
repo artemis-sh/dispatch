@@ -41,6 +41,8 @@ export interface RevisionResolutionStore {
 
 export type RevisionAwareAdmissionCommand = AdmissionCommand & {
   revisionResolution?: GitHubRevisionResolutionRequest;
+  /** Whether this process has a worker that can resolve deferred revisions. */
+  revisionResolverEnabled?: boolean;
   githubIssueAcknowledgment?: {
     subjectType: "issue" | "pull_request";
     installationId: number;

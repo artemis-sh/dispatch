@@ -559,10 +559,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         WHERE binding.tenant_id = $1 AND binding.trigger_id = $2 AND binding.enabled AND $3 = ANY(binding.event_types)
         ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
       [command.tenantId, command.triggerId, command.event.type]);
-      const requestedResolution = "revisionResolution" in command ? command.revisionResolution : undefined;
-      const resolutionCandidates = candidates.rows.filter((row) => requiresRevisionResolution(bindingFromRow(row), command.event));
-      const requiresResolution = resolutionCandidates.length > 0;
-      const revisionResolution = requiresResolution
+       const requestedResolution = "revisionResolution" in command ? command.revisionResolution : undefined;
+       const resolutionCandidates = candidates.rows.filter((row) => requiresRevisionResolution(bindingFromRow(row), command.event));
+       const requiresResolution = resolutionCandidates.length > 0;
+       if (requiresResolution && "revisionResolverEnabled" in command && command.revisionResolverEnabled === false) {
+         throw new WorkspaceResolutionError("Workspace revision resolution requires an enabled revision resolver");
+       }
+       const revisionResolution = requiresResolution
         ? requestedResolution ?? await this.recoverGitHubRevisionResolution(client, command)
         : undefined;
       if (requiresResolution && !revisionResolution) throw new WorkspaceResolutionError("Workspace revision resolution requires a GitHub installation identity");
