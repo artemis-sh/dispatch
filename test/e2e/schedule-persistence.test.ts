@@ -4,6 +4,7 @@ import { GenericContainer, type StartedTestContainer, Wait } from "testcontainer
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 import { ScheduleWorker } from "../../src/schedule/worker.js";
+import { nextCronOccurrence } from "../../src/schedule/cron.js";
 
 describe("schedule persistence", () => {
   let postgres: StartedTestContainer;
@@ -25,7 +26,7 @@ describe("schedule persistence", () => {
 
   it("materializes one durable occurrence and gates execution on exact revision resolution", async () => {
     const now = new Date();
-    const createdAt = new Date(now.getTime() - 2 * 60_000).toISOString();
+    const createdAt = new Date(now.getTime() - 60_000).toISOString();
     const triggerId = `schedule-${randomUUID()}`;
     await store.createTrigger({ id: triggerId, tenantId: "default", type: "schedule.cron", enabled: true,
       createdAt, disabledAt: null, config: { schemaVersion: 1, expression: "* * * * *", timezone: "UTC", misfirePolicy: "skip",
@@ -53,11 +54,26 @@ describe("schedule persistence", () => {
     expect(completed?.executions[0]?.workspace).toMatchObject({ revision: { type: "commit", commit: "a".repeat(40) } });
   });
 
+  it("skips missed occurrences and materializes the next on-time occurrence", async () => {
+    const recovery = new Date();
+    const triggerId = `skip-misfire-${randomUUID()}`;
+    await store.createTrigger({ id: triggerId, tenantId: "default", type: "schedule.cron", enabled: true,
+      createdAt: new Date(recovery.getTime() - 2 * 60_000).toISOString(), disabledAt: null,
+      config: { schemaVersion: 1, expression: "* * * * *", timezone: "UTC", misfirePolicy: "skip",
+        repository: { installationId: 44, id: 10, fullName: "acme/widgets", defaultBranch: "main" } } });
+
+    expect(await store.materializeDueScheduleOccurrences({ now: recovery.toISOString(), limit: 100 })).toBe(0);
+    expect(await store.claimScheduleOccurrence({ leaseOwner: "scheduler", leaseDurationMs: 60_000 })).toBeUndefined();
+
+    const nextOccurrence = nextCronOccurrence("* * * * *", recovery);
+    expect(await store.materializeDueScheduleOccurrences({ now: nextOccurrence.toISOString(), limit: 100 })).toBe(1);
+  });
+
   it("does not lease a materialized occurrence after its trigger is disabled", async () => {
     const now = new Date();
     const triggerId = `disabled-${randomUUID()}`;
     await store.createTrigger({ id: triggerId, tenantId: "default", type: "schedule.cron", enabled: true,
-      createdAt: new Date(now.getTime() - 2 * 60_000).toISOString(), disabledAt: null,
+      createdAt: new Date(now.getTime() - 60_000).toISOString(), disabledAt: null,
       config: { schemaVersion: 1, expression: "* * * * *", timezone: "UTC", misfirePolicy: "skip",
         repository: { installationId: 44, id: 10, fullName: "acme/widgets", defaultBranch: "main" } } });
     expect(await store.materializeDueScheduleOccurrences({ now: now.toISOString(), limit: 100 })).toBe(1);
@@ -69,7 +85,7 @@ describe("schedule persistence", () => {
     const now = new Date();
     const triggerId = `expired-${randomUUID()}`;
     await store.createTrigger({ id: triggerId, tenantId: "default", type: "schedule.cron", enabled: true,
-      createdAt: new Date(now.getTime() - 2 * 60_000).toISOString(), disabledAt: null,
+      createdAt: new Date(now.getTime() - 60_000).toISOString(), disabledAt: null,
       config: { schemaVersion: 1, expression: "* * * * *", timezone: "UTC", misfirePolicy: "skip",
         repository: { installationId: 44, id: 10, fullName: "acme/widgets", defaultBranch: "main" } } });
     expect(await store.materializeDueScheduleOccurrences({ now: now.toISOString(), limit: 100 })).toBe(1);
