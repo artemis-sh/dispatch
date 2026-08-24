@@ -2,6 +2,9 @@ import { z } from "zod";
 
 const FIELD_RANGES = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]] as const;
 const DAY_OF_WEEK_PARSE_MAXIMUM = 7;
+// Gregorian calendar dates repeat on a 400-year cycle. Searching a full cycle
+// ensures valid sparse schedules, such as February 29, survive century gaps.
+const GREGORIAN_CYCLE_MINUTES = 146_097 * 24 * 60;
 
 export const cronExpressionSchema = z.string().min(9).max(128).superRefine((value, context) => {
   try {
@@ -19,7 +22,7 @@ export function nextCronOccurrence(expression: string, after: Date): Date {
   const candidate = new Date(after.getTime());
   candidate.setUTCSeconds(0, 0);
   candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
-  const limit = 366 * 24 * 60 * 5;
+  const limit = GREGORIAN_CYCLE_MINUTES;
   for (let checked = 0; checked < limit; checked += 1) {
     const dayOfMonthMatches = fields[2].has(candidate.getUTCDate());
     const dayOfWeekMatches = fields[4].has(candidate.getUTCDay());
@@ -33,7 +36,7 @@ export function nextCronOccurrence(expression: string, after: Date): Date {
     ) return candidate;
     candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
   }
-  throw new Error("cron expression has no occurrence within five years");
+  throw new Error("cron expression has no occurrence within a Gregorian calendar cycle");
 }
 
 function parseCronExpression(expression: string): {
