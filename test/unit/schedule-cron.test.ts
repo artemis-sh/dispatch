@@ -29,4 +29,12 @@ describe("schedule cron", () => {
   it("rejects expressions with no calendar occurrence", () => {
     expect(cronExpressionSchema.safeParse("0 0 31 2 *").success).toBe(false);
   });
+
+  it("finds a valid leap-day occurrence across the 2100 century gap", () => {
+    expect(cronExpressionSchema.safeParse("0 0 29 2 *").success).toBe(true);
+    expect(nextCronOccurrence(
+      "0 0 29 2 *",
+      new Date("2096-03-01T00:00:00Z"),
+    ).toISOString()).toBe("2104-02-29T00:00:00.000Z");
+  });
 });
