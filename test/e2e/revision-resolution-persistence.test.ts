@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { hashCanonicalJson, type JsonValue } from "../../src/json.js";
+import { normalizeGitHubEvent } from "../../src/connectors/github/index.js";
+import { normalizedCloudEventSchema } from "../../src/execution/events.js";
+import { canonicalJson, hashCanonicalJson, type JsonValue } from "../../src/json.js";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 
 describe("revision resolution persistence", () => {
@@ -133,6 +135,74 @@ describe("revision resolution persistence", () => {
     const replayedAfterFailure = await store.admitEvent(failedCommand);
     expect(replayedAfterFailure.executions).toMatchObject([{ binding: { id: "notify-issue" }, workspace: { type: "empty" }, state: "QUEUED" }]);
     expect(replayedAfterFailure.executions).toHaveLength(1);
+  });
+
+  it("resolves an accepted near-limit GitHub event after adding default-branch metadata", async () => {
+    const tenantId = "default";
+    const triggerId = `trigger-${randomUUID()}`;
+    const admittedAt = new Date().toISOString();
+    await store.createTrigger({
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
+      createdAt: admittedAt, disabledAt: null, enabled: true, id: triggerId, tenantId, type: "github.app.webhook",
+    });
+    await store.publishProfileVersion({
+      createdAt: admittedAt,
+      definition: { schemaVersion: 1, runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } }, sandbox: { templateName: "opencode", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 3600 },
+      id: randomUUID(), profileId: "developer", tenantId, version: 1,
+    });
+    await store.publishBindingVersion({
+      bindingId: "develop-near-limit-issue", createdAt: admittedAt, disabledAt: null, enabled: true, id: randomUUID(), tenantId, triggerId, version: 1,
+      profile: { id: "developer", version: 1 },
+      definition: { schemaVersion: 1, eventTypes: ["com.github.issues.opened"], filter: { all: [] }, prompt: { literal: "Develop", includeEvent: "data" }, workspace: { type: "git", repository: { url: { path: "/repository/cloneUrl" } }, revision: { commit: { path: "/repository/defaultBranchRevision/commit" } } } },
+    });
+
+    const normalize = (labels: string[]) => normalizeGitHubEvent({
+      event: "issues", deliveryId: randomUUID(), payloadSha256: "b".repeat(64),
+      payload: {
+        action: "opened", installation: { id: 44 },
+        repository: { id: 10, full_name: "acme/widgets", clone_url: "https://github.com/acme/widgets.git", default_branch: "main", private: false },
+        sender: { id: 1, login: "dispatch", type: "Bot" },
+        issue: { number: 7, title: "t".repeat(4_096), body: "b".repeat(16 * 1024), state: "open", user: { id: 1, login: "dispatch", type: "Bot" }, labels: labels.map((name) => ({ name })), assignees: [], created_at: admittedAt, updated_at: admittedAt, closed_at: null },
+      },
+    })!;
+    const limit = 40 * 1024;
+    const labels: string[] = [];
+    let event = normalize(labels);
+    for (let index = 0; index < 1_000; index += 1) {
+      let next: typeof event | undefined;
+      for (let length = 255; length > 0; length -= 1) {
+        let candidate: typeof event | undefined;
+        try {
+          candidate = normalize([...labels, "l".repeat(length)]);
+        } catch {
+          continue;
+        }
+        if (normalizedCloudEventSchema.safeParse(candidate).success) {
+          next = candidate;
+          labels.push("l".repeat(length));
+          break;
+        }
+      }
+      if (!next) break;
+      event = next;
+    }
+    expect(normalizedCloudEventSchema.safeParse(event).success).toBe(true);
+    expect(Buffer.byteLength(canonicalJson(event as unknown as JsonValue), "utf8")).toBeGreaterThan(limit - 100);
+
+    const internalEventId = randomUUID();
+    const admitted = await store.admitEvent({
+      tenantId, triggerId, internalEventId, event, sourceDeduplicationKey: randomUUID(), admittedAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event } as JsonValue), revisionResolverEnabled: true,
+      revisionResolution: { provider: "github", installationId: 44, repositoryId: 10, repositoryFullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", branch: "main" },
+    });
+    expect(admitted.executions).toEqual([]);
+    const claim = await store.claimRevisionResolution({ leaseOwner: "resolver", leaseDurationMs: 60_000 });
+    expect(claim).toMatchObject({ eventId: internalEventId });
+    const completed = await store.completeRevisionResolution({
+      eventId: internalEventId, tenantId, leaseOwner: claim!.leaseOwner, leaseToken: claim!.leaseToken,
+      commit: "a".repeat(40), resolvedAt: new Date().toISOString(),
+    });
+    expect(completed?.executions).toEqual([expect.objectContaining({ binding: { id: "develop-near-limit-issue" }, workspace: { revision: { type: "commit", commit: "a".repeat(40) } } })]);
   });
 
   it("rejects failure from a holder whose lease expired on the database clock", async () => {

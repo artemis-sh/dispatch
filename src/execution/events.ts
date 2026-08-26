@@ -25,7 +25,7 @@ const coreAttributes = new Set(["specversion", "id", "source", "type", "subject"
 const reservedExtensions = new Set([TENANT_ID_EXTENSION, DISPATCH_EXTENSION]);
 const extensionNamePattern = /^[a-z0-9]{1,20}$/;
 
-export const normalizedCloudEventSchema = z
+const cloudEventSchema = z
   .object({
     specversion: z.literal("1.0"),
     id: boundedString(1_024),
@@ -40,8 +40,9 @@ export const normalizedCloudEventSchema = z
       `must be at most ${MAX_DATA_BYTES} bytes`,
     ),
   })
-  .catchall(z.unknown())
-  .superRefine((event, context) => {
+  .catchall(z.unknown());
+
+function refineCloudEvent(event: z.output<typeof cloudEventSchema>, context: z.RefinementCtx, enforceCanonicalSize: boolean): void {
     if (Object.hasOwn(event, "data_base64")) {
       context.addIssue({ code: "custom", path: ["data_base64"], message: "data_base64 is not supported" });
     }
@@ -58,10 +59,21 @@ export const normalizedCloudEventSchema = z
         context.addIssue({ code: "custom", path: [name], message: "extension values must be bounded strings, booleans, or safe integers" });
       }
     }
-    if (Buffer.byteLength(canonicalJson(event as JsonValue), "utf8") > MAX_CANONICAL_EVENT_BYTES) {
+    if (enforceCanonicalSize && Buffer.byteLength(canonicalJson(event as JsonValue), "utf8") > MAX_CANONICAL_EVENT_BYTES) {
       context.addIssue({ code: "custom", message: `canonical event must be at most ${MAX_CANONICAL_EVENT_BYTES} bytes` });
     }
-  }) as z.ZodType<NormalizedCloudEvent>;
+}
+
+/** Validates an externally supplied event, including the inbound size limit. */
+export const normalizedCloudEventSchema = cloudEventSchema
+  .superRefine((event, context) => refineCloudEvent(event, context, true)) as z.ZodType<NormalizedCloudEvent>;
+
+/**
+ * Validates an event derived from an accepted event. Control-plane metadata added
+ * after admission is not subject to the inbound canonical-event size limit.
+ */
+export const derivedCloudEventSchema = cloudEventSchema
+  .superRefine((event, context) => refineCloudEvent(event, context, false)) as z.ZodType<NormalizedCloudEvent>;
 
 export type NormalizedCloudEvent = {
   specversion: "1.0";
