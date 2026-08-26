@@ -62,7 +62,7 @@ import { bindingDefinitionSchema, isWakeBinding, publishedBindingVersionSchema, 
 import { triggerSchema, TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger, type TriggerStore } from "../control/trigger.js";
 import { agentProfileDefinitionSchema } from "../execution/api-schema.js";
 import { hashCanonicalJson, resolveJsonPointer, type JsonPrimitive, type JsonValue } from "../json.js";
-import { normalizedCloudEventSchema, type NormalizedCloudEvent } from "../execution/events.js";
+import { derivedCloudEventSchema, normalizedCloudEventSchema, type NormalizedCloudEvent } from "../execution/events.js";
 import type { ClaimedRevisionResolution, RevisionAwareAdmissionCommand, RevisionResolutionStore } from "../revision/types.js";
 import { matchesBinding } from "../control/admission.js";
 import { resolvedWorkspaceSchema } from "../workspace/schema.js";
@@ -704,7 +704,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const data = event.data as Record<string, JsonValue>;
       const repository = data.repository;
       if (repository === null || typeof repository !== "object" || Array.isArray(repository)) throw new Error("Persisted GitHub repository data is invalid");
-      const enrichedEvent = normalizedCloudEventSchema.parse({
+      const enrichedEvent = derivedCloudEventSchema.parse({
         ...event,
         data: {
           ...data,
