@@ -720,6 +720,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           },
         },
       });
+      await client.query("UPDATE dispatch_events SET data = $3::jsonb WHERE id = $1 AND tenant_id = $2", [
+        input.eventId,
+        input.tenantId,
+        JSON.stringify(enrichedEvent.data),
+      ]);
       const command: AdmissionCommand = {
         tenantId: input.tenantId,
         triggerId: eventRow.trigger_id,

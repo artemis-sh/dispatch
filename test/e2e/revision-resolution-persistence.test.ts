@@ -205,6 +205,74 @@ describe("revision resolution persistence", () => {
     expect(completed?.executions).toEqual([expect.objectContaining({ binding: { id: "develop-near-limit-issue" }, workspace: { revision: { type: "commit", commit: "a".repeat(40) } } })]);
   });
 
+  it("uses persisted default-branch metadata for after-turn correlation", async () => {
+    const tenantId = "default";
+    const triggerId = `trigger-${randomUUID()}`;
+    const admittedAt = new Date().toISOString();
+    await store.createTrigger({
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
+      createdAt: admittedAt, disabledAt: null, enabled: true, id: triggerId, tenantId, type: "github.app.webhook",
+    });
+    await store.publishProfileVersion({
+      createdAt: admittedAt,
+      definition: { schemaVersion: 1, runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } }, sandbox: { templateName: "opencode", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 3600 },
+      id: randomUUID(), profileId: "developer", tenantId, version: 1,
+    });
+    await store.publishBindingVersion({
+      bindingId: "resolved-branch-wait", createdAt: admittedAt, disabledAt: null, enabled: true, id: randomUUID(),
+      tenantId, triggerId, version: 1, profile: { id: "developer", version: 1 },
+      definition: {
+        schemaVersion: 1, eventTypes: ["com.github.issues.opened"], filter: { all: [] },
+        prompt: { literal: "Develop", includeEvent: "data" },
+        workspace: { type: "git", repository: { url: { path: "/repository/cloneUrl" } }, revision: { commit: { path: "/repository/defaultBranchRevision/commit" } } },
+        afterTurn: {
+          disposition: "wait",
+          wait: {
+            name: "resolved-branch-wait",
+            correlation: [{ name: "resolvedCommit", source: "event", path: "/repository/defaultBranchRevision/commit" }],
+            deadlineSeconds: 600,
+          },
+        },
+      },
+    });
+    const event = {
+      specversion: "1.0" as const, id: randomUUID(), source: "https://github.com/acme/widgets", type: "com.github.issues.opened",
+      datacontenttype: "application/json",
+      data: {
+        schemaVersion: 1, installationId: 44,
+        repository: { id: 10, fullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", defaultBranch: "main", private: false },
+        issue: { number: 7 },
+      },
+    };
+    const eventId = randomUUID();
+    await store.admitEvent({
+      tenantId, triggerId, internalEventId: eventId, event, sourceDeduplicationKey: randomUUID(), admittedAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event } as JsonValue),
+      revisionResolution: { provider: "github", installationId: 44, repositoryId: 10, repositoryFullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", branch: "main" },
+    });
+    const resolution = await store.claimRevisionResolution({ leaseOwner: "resolver", leaseDurationMs: 60_000 });
+    const completed = await store.completeRevisionResolution({
+      eventId, tenantId, leaseOwner: resolution!.leaseOwner, leaseToken: resolution!.leaseToken,
+      commit: "a".repeat(40), resolvedAt: new Date().toISOString(),
+    });
+    const executionId = completed!.executions[0]!.id;
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "worker", leaseDurationMs: 60_000 });
+    expect(claimed?.executionId).toBe(executionId);
+    await store.transitionLeasedExecution({
+      actor: claimed!.lease.leaseOwner, attempt: claimed!.lease.attempt, executionId,
+      expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING", fencingToken: claimed!.lease.fencingToken,
+      leaseOwner: claimed!.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId,
+    });
+    expect(await store.completeLeasedExecutionTurn({
+      actor: claimed!.lease.leaseOwner, attempt: claimed!.lease.attempt, executionId, fencingToken: claimed!.lease.fencingToken,
+      leaseOwner: claimed!.lease.leaseOwner, reason: "done", result: null, tenantId,
+    })).toMatchObject({ applied: true, executionState: "WAITING" });
+    expect(await store.getExecutionDetail(tenantId, executionId)).toMatchObject({
+      state: "WAITING",
+      waits: [{ name: "resolved-branch-wait", state: "ACTIVE", correlation: { resolvedCommit: "a".repeat(40) } }],
+    });
+  });
+
   it("rejects failure from a holder whose lease expired on the database clock", async () => {
     const tenantId = "default";
     const triggerId = `trigger-${randomUUID()}`;
