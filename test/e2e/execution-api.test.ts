@@ -6,6 +6,7 @@ import { planAdmission, type AdmissionCommand, type AdmissionResult } from "../.
 import { BindingVersionAlreadyExistsError, type PublishedBindingVersion } from "../../src/control/binding.js";
 import { TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger } from "../../src/control/trigger.js";
 import type { PublishProfileVersionCommand } from "../../src/execution/store.js";
+import type { RevisionAwareAdmissionCommand } from "../../src/revision/types.js";
 import {
   ExecutionCancellationConflictError,
   IdempotencyConflictError,
@@ -175,6 +176,18 @@ describe("public API", () => {
     expect(unmatched.body).toMatchObject({ replayed: false, executions: [], wakes: [], pendingWakes: [] });
   });
 
+  it("passes disabled revision resolver state to CloudEvent admissions", async () => {
+    const store = new FakeControlStore();
+    const app = testApp(store);
+    await publishDependencies(app);
+
+    expect((await request(app, "POST", "/v1/triggers/github/events", cloudEvent("issue.opened", {}), { "Idempotency-Key": "resolver-disabled" })).status).toBe(202);
+
+    expect(store.lastAdmission && "revisionResolverEnabled" in store.lastAdmission
+      ? store.lastAdmission.revisionResolverEnabled
+      : undefined).toBe(false);
+  });
+
   it("requires structured CloudEvents and Idempotency-Key and maps conflicts", async () => {
     const app = testApp();
     await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
@@ -322,7 +335,7 @@ class FakeControlStore implements ControlApiStore {
   readonly bindings = new Map<string, PublishedBindingVersion>();
   readonly executions = new Map<string, ExecutionDetail>();
   readonly admissions = new Map<string, { hash: string; result: AdmissionResult }>();
-  lastAdmission?: AdmissionCommand;
+  lastAdmission?: AdmissionCommand | RevisionAwareAdmissionCommand;
   lastCancellation?: RequestExecutionCancellationCommand;
   failure?: Error;
 
@@ -365,7 +378,7 @@ class FakeControlStore implements ControlApiStore {
   async getBindingVersion(tenantId: string, bindingId: string, version: number) { this.maybeFail(); return this.bindings.get(`${tenantId}:${bindingId}:${version}`); }
   async disableBindingVersion(tenantId: string, bindingId: string, version: number, disabledAt: string) { this.maybeFail(); const key = `${tenantId}:${bindingId}:${version}`; const value = this.bindings.get(key); if (!value) return undefined; if (!value.enabled) return value; const disabled = { ...value, enabled: false, disabledAt }; this.bindings.set(key, disabled); return disabled; }
   async listBindingCandidates(tenantId: string, triggerId: string, eventType: string) { this.maybeFail(); return [...this.bindings.values()].filter((value) => value.tenantId === tenantId && value.triggerId === triggerId && value.enabled && value.definition.eventTypes.includes(eventType)); }
-  async admitEvent(command: AdmissionCommand): Promise<AdmissionResult> {
+  async admitEvent(command: AdmissionCommand | RevisionAwareAdmissionCommand): Promise<AdmissionResult> {
     this.maybeFail(); this.lastAdmission = command;
     const key = `${command.tenantId}:${command.sourceDeduplicationKey}`;
     const previous = this.admissions.get(key);

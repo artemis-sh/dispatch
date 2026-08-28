@@ -137,6 +137,7 @@ export function mountControlApi(
       sourceDeduplicationKey: sourceDeliveryIdempotencyKey(triggerID, context.req.header("idempotency-key")!),
       admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: triggerID, event } as JsonValue),
       admittedAt: new Date().toISOString(),
+      revisionResolverEnabled: config.revisionResolverEnabled,
     });
     return context.json(result, 202);
   }) as never);
