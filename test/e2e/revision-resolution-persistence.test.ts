@@ -72,11 +72,23 @@ describe("revision resolution persistence", () => {
     const command = {
       tenantId, triggerId, internalEventId, event, sourceDeduplicationKey: randomUUID(), admittedAt,
       admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event } as JsonValue),
+      revisionResolverEnabled: true,
       revisionResolution: {
         provider: "github" as const, installationId: 44, repositoryId: 10,
         repositoryFullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", branch: "main",
       },
     };
+
+    const disabledEvent = { ...event, id: randomUUID() };
+    await expect(store.admitEvent({
+      ...command,
+      internalEventId: randomUUID(),
+      event: disabledEvent,
+      sourceDeduplicationKey: randomUUID(),
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event: disabledEvent } as JsonValue),
+      revisionResolverEnabled: false,
+    })).rejects.toMatchObject({ message: "Workspace revision resolution requires an enabled revision resolver" });
+    expect(await store.claimRevisionResolution({ leaseOwner: "disabled-resolver", leaseDurationMs: 60_000 })).toBeUndefined();
 
     const admitted = await store.admitEvent(command);
     expect(admitted.executions).toMatchObject([{ binding: { id: "notify-issue" }, workspace: { type: "empty" }, state: "QUEUED" }]);
