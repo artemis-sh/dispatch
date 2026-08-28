@@ -107,6 +107,31 @@ describe("OpenAPI docs", () => {
     expect(body).toContain("/openapi.json");
   });
 
+  it("rejects schedule triggers when the schedule worker is disabled", async () => {
+    const app = createOpenApiApp();
+    const store = emptyControlStore();
+    mountControlApi(app, testConfig(), store);
+
+    const response = await app.request("/v1/triggers", {
+      method: "POST",
+      headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "every-minute",
+        type: "schedule.cron",
+        config: {
+          schemaVersion: 1,
+          expression: "* * * * *",
+          timezone: "UTC",
+          misfirePolicy: "skip",
+          repository: { installationId: 44, id: 10, fullName: "acme/widgets", defaultBranch: "main" },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({ error: "Schedule triggers require the schedule worker to be enabled" });
+  });
+
   it("serves simple health", async () => {
     const response = await createTestApp().request("/healthz");
 

@@ -29,6 +29,7 @@ const TENANT_ID = "default";
 const MAX_BODY_BYTES = 128 * 1024;
 const WORKSPACE_RESOLUTION_MESSAGE = "Workspace could not be resolved from event data";
 const GITHUB_WEBHOOK_SECRET_UNAVAILABLE_MESSAGE = "GitHub webhook secret unavailable";
+const SCHEDULE_WORKER_UNAVAILABLE_MESSAGE = "Schedule triggers require the schedule worker to be enabled";
 export type ControlApiStore = ExecutionStore & TriggerStore & BindingStore & EventAdmissionStore & ConnectionStore;
 
 export function mountControlApi(
@@ -69,6 +70,9 @@ export function mountControlApi(
 
   api.openapi(createTriggerRoute, async (context) => handle(context, async () => {
     const body = context.req.valid("json");
+    if (body.type === "schedule.cron" && !config.scheduleWorkerEnabled) {
+      return context.json({ error: SCHEDULE_WORKER_UNAVAILABLE_MESSAGE }, 422);
+    }
     if (body.type === "github.app.webhook") {
       const secret = readEnvironmentVariable(body.config.webhookSecretEnv);
       const secretBytes = secret === undefined ? 0 : Buffer.byteLength(secret, "utf8");
