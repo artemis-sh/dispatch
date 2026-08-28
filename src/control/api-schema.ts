@@ -32,6 +32,9 @@ const createTriggerRequestSchema = z.discriminatedUnion("type", [
 const githubWebhookSecretUnavailableSchema = z.object({
   error: z.literal("GitHub webhook secret unavailable"),
 }).strict().openapi("GitHubWebhookSecretUnavailableError");
+const scheduleWorkerUnavailableSchema = z.object({
+  error: z.literal("Schedule triggers require the schedule worker to be enabled"),
+}).strict().openapi("ScheduleWorkerUnavailableError");
 const bindingVersionSchema = z.object({
   id: simpleIdSchema,
   bindingId: simpleIdSchema,
@@ -121,7 +124,7 @@ export const getConnectionRoute = createRoute({
 export const createTriggerRoute = createRoute({
   method: "post", path: "/triggers", tags: ["control"], summary: "Create a trigger", security: [{ bearerAuth: [] }],
   request: { body: { required: true, content: { "application/json": { schema: createTriggerRequestSchema } } } },
-  responses: { 201: jsonResponse("Trigger created.", triggerSchema), ...securedErrors, 409: jsonResponse("Trigger already exists.", errorSchema), 422: jsonResponse("GitHub webhook secret is unavailable or invalid.", githubWebhookSecretUnavailableSchema) },
+  responses: { 201: jsonResponse("Trigger created.", triggerSchema), ...securedErrors, 409: jsonResponse("Trigger already exists.", errorSchema), 422: jsonResponse("Schedule triggers or GitHub webhook triggers cannot be created in the current configuration.", z.union([githubWebhookSecretUnavailableSchema, scheduleWorkerUnavailableSchema])) },
 });
 export const getTriggerRoute = createRoute({
   method: "get", path: "/triggers/{triggerID}", tags: ["control"], summary: "Read a trigger", security: [{ bearerAuth: [] }],
