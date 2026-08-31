@@ -734,7 +734,10 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         admissionHash: eventRow.admission_hash,
         admittedAt: input.resolvedAt,
       };
-      const created = await this.createExecutions(client, command, candidates.rows.filter((row) => requiresRevisionResolution(bindingFromRow(row), event)));
+      const created = await this.createExecutions(client, command, candidates.rows.filter((row) => {
+        const binding = bindingFromRow(row);
+        return requiresRevisionResolution({ ...binding, enabled: true }, event);
+      }), true);
       await client.query(`UPDATE dispatch_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
         WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
@@ -762,10 +765,18 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     return result.rowCount === 1;
   }
 
-  private async createExecutions(client: pg.PoolClient, command: AdmissionCommand, rows: BindingProfileRow[]): Promise<Execution[]> {
+  private async createExecutions(
+    client: pg.PoolClient,
+    command: AdmissionCommand,
+    rows: BindingProfileRow[],
+    matchedAtAdmission = false,
+  ): Promise<Execution[]> {
     const created: Execution[] = [];
     const plans = rows.flatMap((row) => {
-      const binding = bindingFromRow(row);
+      const persistedBinding = bindingFromRow(row);
+      const binding = matchedAtAdmission
+        ? { ...persistedBinding, enabled: true, definition: { ...persistedBinding.definition, filter: { all: [] } } }
+        : persistedBinding;
       const planned = planExecution(binding, command);
       if (!planned || "disposition" in binding.definition) return [];
       const singleton = projectActiveSingleton(binding.definition, command.event);
