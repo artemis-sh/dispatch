@@ -149,6 +149,74 @@ describe("revision resolution persistence", () => {
     expect(replayedAfterFailure.executions).toHaveLength(1);
   });
 
+  it("preserves admission matches when default-branch metadata changes filter results", async () => {
+    const tenantId = "default";
+    const triggerId = `trigger-${randomUUID()}`;
+    const admittedAt = new Date().toISOString();
+    await store.createTrigger({
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
+      createdAt: admittedAt, disabledAt: null, enabled: true, id: triggerId, tenantId, type: "github.app.webhook",
+    });
+    await store.publishProfileVersion({
+      createdAt: admittedAt,
+      definition: {
+        schemaVersion: 1, runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } },
+        sandbox: { templateName: "opencode", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 3600,
+      },
+      id: randomUUID(), profileId: "developer", tenantId, version: 1,
+    });
+    await store.publishBindingVersion({
+      bindingId: "develop-absent-revision", createdAt: admittedAt, disabledAt: null, enabled: true, id: randomUUID(),
+      tenantId, triggerId, version: 1, profile: { id: "developer", version: 1 },
+      definition: {
+        schemaVersion: 1, eventTypes: ["com.github.issues.opened"],
+        filter: { all: [{ path: "/repository/defaultBranchRevision", op: "exists", value: false }] },
+        prompt: { literal: "Develop", includeEvent: "data" },
+        workspace: {
+          type: "git", repository: { url: { path: "/repository/cloneUrl" } },
+          revision: { commit: { path: "/repository/defaultBranchRevision/commit" } },
+        },
+      },
+    });
+    const event = {
+      specversion: "1.0" as const,
+      id: randomUUID(), source: "https://github.com/acme/widgets", type: "com.github.issues.opened",
+      datacontenttype: "application/json",
+      data: {
+        schemaVersion: 1, installationId: 44,
+        repository: { id: 10, fullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", defaultBranch: "main", private: false },
+        issue: { number: 7 },
+      },
+    };
+    const internalEventId = randomUUID();
+    const command = {
+      tenantId, triggerId, internalEventId, event, sourceDeduplicationKey: randomUUID(), admittedAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event } as JsonValue),
+      revisionResolverEnabled: true,
+      revisionResolution: {
+        provider: "github" as const, installationId: 44, repositoryId: 10,
+        repositoryFullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", branch: "main",
+      },
+    };
+
+    expect((await store.admitEvent(command)).executions).toEqual([]);
+    const claim = await store.claimRevisionResolution({ leaseOwner: "resolver", leaseDurationMs: 60_000 });
+    expect(claim).toMatchObject({ eventId: internalEventId });
+    const completed = await store.completeRevisionResolution({
+      eventId: internalEventId, tenantId, leaseOwner: claim!.leaseOwner, leaseToken: claim!.leaseToken,
+      commit: "a".repeat(40), resolvedAt: new Date().toISOString(),
+    });
+
+    expect(completed?.executions).toEqual([expect.objectContaining({
+      binding: { id: "develop-absent-revision", version: 1 },
+      workspace: {
+        type: "git", repository: { url: "https://github.com/acme/widgets.git" },
+        revision: { type: "commit", commit: "a".repeat(40) },
+      },
+    })]);
+    expect((await store.admitEvent(command)).executions).toHaveLength(1);
+  });
+
   it("resolves an accepted near-limit GitHub event after adding default-branch metadata", async () => {
     const tenantId = "default";
     const triggerId = `trigger-${randomUUID()}`;

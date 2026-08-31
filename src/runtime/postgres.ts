@@ -734,10 +734,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         admissionHash: eventRow.admission_hash,
         admittedAt: input.resolvedAt,
       };
-      const created = await this.createExecutions(client, command, candidates.rows.filter((row) => {
-        const binding = bindingFromRow(row);
-        return requiresRevisionResolution({ ...binding, enabled: true }, event);
-      }), true);
+      const created = await this.createExecutions(client, command, candidates.rows, true);
       await client.query(`UPDATE dispatch_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
         WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
