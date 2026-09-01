@@ -393,18 +393,23 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         const trigger = triggerSchema.parse({ id: row.trigger_id, tenantId: row.tenant_id, type: "schedule.cron", config: row.config,
           enabled: true, createdAt: now.toISOString(), disabledAt: null });
         if (trigger.type !== "schedule.cron") throw new Error("Persisted schedule trigger is invalid");
-        // A cron occurrence is on time for its scheduled UTC minute. Older
-        // occurrences are misfires and must not be materialized for `skip`.
-        if (row.next_fire_at >= currentMinute) {
+        // A cron occurrence is on time for its scheduled UTC minute. Advance
+        // past older misfires from their scheduled times so recovery retains
+        // an occurrence due during the current minute.
+        let nextFireAt = row.next_fire_at;
+        while (nextFireAt < currentMinute) {
+          nextFireAt = nextCronOccurrence(trigger.config.expression, nextFireAt);
+        }
+        if (nextFireAt <= now) {
           const occurrence = await client.query(`INSERT INTO dispatch_schedule_occurrences
             (id, tenant_id, trigger_id, scheduled_at, state, available_at, created_at, updated_at)
             VALUES ($1,$2,$3,$4,'PENDING',$5,$5,$5) ON CONFLICT (tenant_id, trigger_id, scheduled_at) DO NOTHING`,
-          [randomUUID(), row.tenant_id, row.trigger_id, row.next_fire_at, now]);
+          [randomUUID(), row.tenant_id, row.trigger_id, nextFireAt, now]);
           materialized += occurrence.rowCount ?? 0;
         }
         await client.query(`UPDATE dispatch_schedule_states SET next_fire_at=$3, updated_at=$4
           WHERE tenant_id=$1 AND trigger_id=$2`, [row.tenant_id, row.trigger_id,
-          nextCronOccurrence(trigger.config.expression, now), now]);
+          nextCronOccurrence(trigger.config.expression, nextFireAt), now]);
       }
       await client.query("COMMIT");
       return materialized;
