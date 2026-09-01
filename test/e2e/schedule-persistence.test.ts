@@ -4,7 +4,6 @@ import { GenericContainer, type StartedTestContainer, Wait } from "testcontainer
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 import { ScheduleWorker } from "../../src/schedule/worker.js";
-import { nextCronOccurrence } from "../../src/schedule/cron.js";
 
 describe("schedule persistence", () => {
   let postgres: StartedTestContainer;
@@ -54,19 +53,18 @@ describe("schedule persistence", () => {
     expect(completed?.executions[0]?.workspace).toMatchObject({ revision: { type: "commit", commit: "a".repeat(40) } });
   });
 
-  it("skips missed occurrences and materializes the next on-time occurrence", async () => {
-    const recovery = new Date();
+  it("skips older misfires without dropping the current-minute occurrence", async () => {
+    const recovery = new Date("2026-09-01T12:02:30.000Z");
+    const createdAt = new Date("2026-09-01T11:59:00.000Z").toISOString();
     const triggerId = `skip-misfire-${randomUUID()}`;
     await store.createTrigger({ id: triggerId, tenantId: "default", type: "schedule.cron", enabled: true,
-      createdAt: new Date(recovery.getTime() - 2 * 60_000).toISOString(), disabledAt: null,
+      createdAt, disabledAt: null,
       config: { schemaVersion: 1, expression: "* * * * *", timezone: "UTC", misfirePolicy: "skip",
         repository: { installationId: 44, id: 10, fullName: "acme/widgets", defaultBranch: "main" } } });
 
-    expect(await store.materializeDueScheduleOccurrences({ now: recovery.toISOString(), limit: 100 })).toBe(0);
-    expect(await store.claimScheduleOccurrence({ leaseOwner: "scheduler", leaseDurationMs: 60_000 })).toBeUndefined();
-
-    const nextOccurrence = nextCronOccurrence("* * * * *", recovery);
-    expect(await store.materializeDueScheduleOccurrences({ now: nextOccurrence.toISOString(), limit: 100 })).toBe(1);
+    expect(await store.materializeDueScheduleOccurrences({ now: recovery.toISOString(), limit: 100 })).toBe(1);
+    const occurrence = await store.claimScheduleOccurrence({ leaseOwner: "scheduler", leaseDurationMs: 60_000 });
+    expect(occurrence?.scheduledAt).toBe("2026-09-01T12:02:00.000Z");
   });
 
   it("does not lease a materialized occurrence after its trigger is disabled", async () => {
