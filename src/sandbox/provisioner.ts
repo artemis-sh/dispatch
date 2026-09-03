@@ -590,11 +590,14 @@ function assertOwnership(claim: SandboxClaim, expected: Record<string, string>, 
 }
 
 function deletePreconditions(claim: SandboxClaim): { body: { preconditions: { uid?: string; resourceVersion?: string } } } | object {
-  const preconditions = claim.metadata.uid
-    ? { uid: claim.metadata.uid }
-    : claim.metadata.resourceVersion
-      ? { resourceVersion: claim.metadata.resourceVersion }
-      : {};
+  // UID alone does not fence an in-place adoption: a successor can transfer
+  // the fencing annotation while retaining the same claim UID.  Requiring the
+  // resource version makes a stale cleanup fail instead of deleting that
+  // successor's claim.
+  const preconditions = {
+    ...(claim.metadata.uid ? { uid: claim.metadata.uid } : {}),
+    ...(claim.metadata.resourceVersion ? { resourceVersion: claim.metadata.resourceVersion } : {}),
+  };
   return Object.keys(preconditions).length > 0 ? { body: { preconditions } } : {};
 }
 
