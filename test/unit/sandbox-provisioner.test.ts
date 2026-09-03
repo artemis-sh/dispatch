@@ -740,7 +740,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(remove).toHaveBeenCalledWith(expect.objectContaining({
       name: claimNameForExecutionAttempt(input.executionId, input.attempt),
       propagationPolicy: "Foreground",
-      body: { preconditions: { uid: "claim-uid" } },
+      body: { preconditions: { uid: "claim-uid", resourceVersion: "23" } },
     }));
   });
 
