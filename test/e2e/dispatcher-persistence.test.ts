@@ -349,6 +349,62 @@ describe("dispatcher persistence", () => {
     expect((await admit("c".repeat(40))).executions).toEqual([]);
   });
 
+  it("rejects a checkpoint completion whose lease expires while it waits for the checkpoint lock", async () => {
+    const token = randomUUID();
+    const bindingId = `checkpoint-expiry-${token}`;
+    const checkpointName = "repository-audit";
+    const eventType = `dev.dispatch.checkpoint-expiry.${token}`;
+    const createdAt = new Date().toISOString();
+    await store.publishBindingVersion({
+      bindingId, createdAt, disabledAt: null, enabled: true, id: randomUUID(), profile: { id: profileId, version: 1 },
+      tenantId: "default", triggerId: "dispatcher-test", version: 1,
+      definition: {
+        schemaVersion: 1, eventTypes: [eventType], filter: { all: [] }, prompt: { includeEvent: "none", literal: "Audit" },
+        workspace: { type: "empty" },
+        checkpoint: { name: checkpointName, key: ["/repository/id"], value: { path: "/revision" }, advanceOn: "succeeded", unchanged: "skip" },
+      },
+    });
+    const event = {
+      data: { repository: { id: 42 }, revision: "a".repeat(40) }, datacontenttype: "application/json",
+      id: token, source: "/test/checkpoint-expiry", specversion: "1.0" as const, type: eventType,
+    };
+    const admitted = await store.admitEvent({
+      admittedAt: createdAt, admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "dispatcher-test", event }),
+      event, internalEventId: randomUUID(), sourceDeduplicationKey: token, tenantId: "default", triggerId: "dispatcher-test",
+    });
+    const executionId = admitted.executions[0]!.id;
+    const claimed = await startRunningExecution(executionId, "checkpoint-expiry-worker", undefined, 100);
+    const advance = (await pool.query<{ checkpoint_key_hash: string }>(
+      "select checkpoint_key_hash from dispatch_execution_checkpoint_advances where execution_id = $1",
+      [executionId],
+    )).rows[0];
+    if (!advance) throw new Error("Expected checkpoint advance");
+    const lockHolder = await pool.connect();
+    try {
+      await lockHolder.query("BEGIN");
+      await lockHolder.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `execution-checkpoint:default:${bindingId}:${checkpointName}:${advance.checkpoint_key_hash}`,
+      ]);
+      const completion = store.completeLeasedExecutionTurn({
+        actor: "checkpoint-expiry-worker", attempt: claimed.lease.attempt, executionId,
+        fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner,
+        reason: "audit completed", result: { ok: true }, tenantId: "default",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await lockHolder.query("COMMIT");
+
+      await expect(completion).resolves.toEqual({ applied: false, reason: "LEASE_EXPIRED" });
+    } finally {
+      await lockHolder.query("ROLLBACK").catch(() => undefined);
+      lockHolder.release();
+    }
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution.state).toBe("RUNNING");
+    expect(persisted.attempts).toMatchObject([{ state: "RUNNING", lease_owner: "checkpoint-expiry-worker" }]);
+    expect((await pool.query("select state from dispatch_execution_checkpoint_advances where execution_id = $1", [executionId])).rows)
+      .toEqual([{ state: "PENDING" }]);
+  });
+
   it("takes over an expired checkpointed running attempt without changing its identity or history", async () => {
     const executionId = await queueExecution();
     const original = await startRunningExecution(executionId, "dispatcher-stale", {
@@ -1156,8 +1212,9 @@ describe("dispatcher persistence", () => {
     executionId: string,
     leaseOwner: string,
     checkpoint?: { workloadName: string; opencodeSessionId: string },
+    leaseDurationMs = 60_000,
   ) {
-    const claimed = await store.claimNextQueuedExecution({ leaseOwner, leaseDurationMs: 60_000 });
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner, leaseDurationMs });
     if (!claimed || claimed.executionId !== executionId) throw new Error("Expected execution attempt");
     await expect(store.transitionLeasedExecution({
       executionId,
