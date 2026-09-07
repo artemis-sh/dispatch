@@ -2467,23 +2467,12 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           JSON.stringify(pending.input), JSON.stringify(pending.workspace), now]);
       }
 
-      const attemptState = executionState === "TIMED_OUT" ? "TIMED_OUT" : "SUCCEEDED";
-      await client.query(`UPDATE dispatch_execution_attempts SET state = $6::text, finished_at = $7,
-        lease_owner = NULL, lease_expires_at = NULL WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
-        AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'`,
-      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, attemptState, now]);
-      await client.query(`UPDATE dispatch_executions SET state = $3::text, result = $4::jsonb, updated_at = $5::timestamptz,
-        timeout_at = CASE
-          WHEN $3::text = 'WAITING' THEN $6::timestamptz
-          WHEN $3::text = 'QUEUED' THEN $5::timestamptz + (((resolved_policy->>'timeoutSeconds')::integer) * interval '1 second')
-          ELSE timeout_at END,
-        current_input_sequence = COALESCE($7::integer, current_input_sequence),
-        available_at = CASE WHEN $3::text = 'QUEUED' THEN $5::timestamptz ELSE available_at END,
-        completed_at = CASE WHEN $3::text IN ('TIMED_OUT','FAILED','CANCELLED','COMPLETED','DEAD_LETTERED') THEN $5::timestamptz ELSE NULL END
-        WHERE id = $1 AND tenant_id = $2 AND state = 'RUNNING'`,
-      [command.executionId, command.tenantId, executionState, JSON.stringify(command.result), now, wait?.deadline ?? execution.timeout_at, continuationSequence]);
+      let advance: {
+        binding_id: string; checkpoint_name: string; checkpoint_key_hash: string; checkpoint_key_values: JsonPrimitive[];
+        expected_previous_exists: boolean; expected_previous_value: JsonPrimitive | null; target_value: JsonPrimitive;
+      } | undefined;
       if (executionState === "SUCCEEDED") {
-        const advance = (await client.query<{
+        advance = (await client.query<{
           binding_id: string; checkpoint_name: string; checkpoint_key_hash: string; checkpoint_key_values: JsonPrimitive[];
           expected_previous_exists: boolean; expected_previous_value: JsonPrimitive | null; target_value: JsonPrimitive;
         }>(`SELECT binding_id, checkpoint_name, checkpoint_key_hash, checkpoint_key_values,
@@ -2495,29 +2484,58 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
             `execution-checkpoint:${command.tenantId}:${advance.binding_id}:${advance.checkpoint_name}:${advance.checkpoint_key_hash}`,
           ]);
-          let applied: boolean;
-          if (advance.expected_previous_exists) {
-            const updated = await client.query(`UPDATE dispatch_execution_checkpoints SET
-              value=$6::jsonb, advanced_by_execution_id=$5, advanced_at=$7, updated_at=$7
-              WHERE tenant_id=$1 AND binding_id=$2 AND checkpoint_name=$3 AND checkpoint_key_hash=$4
-                AND value=$8::jsonb`,
-            [command.tenantId, advance.binding_id, advance.checkpoint_name, advance.checkpoint_key_hash,
-              command.executionId, JSON.stringify(advance.target_value), now, JSON.stringify(advance.expected_previous_value)]);
-            applied = updated.rowCount === 1;
-          } else {
-            const inserted = await client.query(`INSERT INTO dispatch_execution_checkpoints
-              (tenant_id,binding_id,checkpoint_name,checkpoint_key_hash,checkpoint_key_values,value,
-               advanced_by_execution_id,advanced_at,created_at,updated_at)
-              VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$8,$8) ON CONFLICT DO NOTHING`,
-            [command.tenantId, advance.binding_id, advance.checkpoint_name, advance.checkpoint_key_hash,
-              JSON.stringify(advance.checkpoint_key_values), JSON.stringify(advance.target_value), command.executionId, now]);
-            applied = inserted.rowCount === 1;
-          }
-          await client.query(`UPDATE dispatch_execution_checkpoint_advances SET state=$3, applied_at=$4
-            WHERE execution_id=$1 AND tenant_id=$2`,
-          [command.executionId, command.tenantId, applied ? "APPLIED" : "SUPERSEDED", now]);
-          checkpointOutcome = { bindingId: advance.binding_id, result: applied ? "applied" : "superseded" };
         }
+      }
+
+      const attemptState = executionState === "TIMED_OUT" ? "TIMED_OUT" : "SUCCEEDED";
+      const completed = await client.query(`WITH updated_attempt AS (
+        UPDATE dispatch_execution_attempts SET state = $6::text, finished_at = $7,
+          lease_owner = NULL, lease_expires_at = NULL
+        WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+          AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'
+          AND lease_expires_at > clock_timestamp()
+        RETURNING execution_id
+      )
+      UPDATE dispatch_executions SET state = $8::text, result = $9::jsonb, updated_at = $7::timestamptz,
+        timeout_at = CASE
+          WHEN $8::text = 'WAITING' THEN $10::timestamptz
+          WHEN $8::text = 'QUEUED' THEN $7::timestamptz + (((resolved_policy->>'timeoutSeconds')::integer) * interval '1 second')
+          ELSE timeout_at END,
+        current_input_sequence = COALESCE($11::integer, current_input_sequence),
+        available_at = CASE WHEN $8::text = 'QUEUED' THEN $7::timestamptz ELSE available_at END,
+        completed_at = CASE WHEN $8::text IN ('TIMED_OUT','FAILED','CANCELLED','COMPLETED','DEAD_LETTERED') THEN $7::timestamptz ELSE NULL END
+        WHERE id = $1 AND tenant_id = $2 AND state = 'RUNNING'
+          AND EXISTS (SELECT 1 FROM updated_attempt)
+        RETURNING id`,
+      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, attemptState,
+        now, executionState, JSON.stringify(command.result), wait?.deadline ?? execution.timeout_at, continuationSequence]);
+      if (completed.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "LEASE_EXPIRED" };
+      }
+      if (advance) {
+        let applied: boolean;
+        if (advance.expected_previous_exists) {
+          const updated = await client.query(`UPDATE dispatch_execution_checkpoints SET
+            value=$6::jsonb, advanced_by_execution_id=$5, advanced_at=$7, updated_at=$7
+            WHERE tenant_id=$1 AND binding_id=$2 AND checkpoint_name=$3 AND checkpoint_key_hash=$4
+              AND value=$8::jsonb`,
+          [command.tenantId, advance.binding_id, advance.checkpoint_name, advance.checkpoint_key_hash,
+            command.executionId, JSON.stringify(advance.target_value), now, JSON.stringify(advance.expected_previous_value)]);
+          applied = updated.rowCount === 1;
+        } else {
+          const inserted = await client.query(`INSERT INTO dispatch_execution_checkpoints
+            (tenant_id,binding_id,checkpoint_name,checkpoint_key_hash,checkpoint_key_values,value,
+             advanced_by_execution_id,advanced_at,created_at,updated_at)
+            VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$8,$8) ON CONFLICT DO NOTHING`,
+          [command.tenantId, advance.binding_id, advance.checkpoint_name, advance.checkpoint_key_hash,
+            JSON.stringify(advance.checkpoint_key_values), JSON.stringify(advance.target_value), command.executionId, now]);
+          applied = inserted.rowCount === 1;
+        }
+        await client.query(`UPDATE dispatch_execution_checkpoint_advances SET state=$3, applied_at=$4
+          WHERE execution_id=$1 AND tenant_id=$2`,
+        [command.executionId, command.tenantId, applied ? "APPLIED" : "SUPERSEDED", now]);
+        checkpointOutcome = { bindingId: advance.binding_id, result: applied ? "applied" : "superseded" };
       }
       if (executionState === "WAITING" && wait) {
         await client.query(`INSERT INTO dispatch_event_waits
