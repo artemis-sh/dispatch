@@ -50,7 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     controlPlaneUrl: readControlPlaneUrl(env.DISPATCH_CONTROL_PLANE_URL),
     dispatcherEnabled: readStrictBoolean(env.DISPATCH_DISPATCHER_ENABLED, true),
     dispatcherIdlePollMs: readTimerDelay(env.DISPATCH_DISPATCHER_IDLE_POLL_MS, 500),
-    dispatcherLeaseDurationMs: readPositiveInteger(env.DISPATCH_DISPATCHER_LEASE_DURATION_MS, 60_000),
+    dispatcherLeaseDurationMs: readTimerDelay(env.DISPATCH_DISPATCHER_LEASE_DURATION_MS, 60_000),
     dispatcherRenewIntervalMs: readTimerDelay(env.DISPATCH_DISPATCHER_RENEW_INTERVAL_MS, 20_000),
     dispatcherWorkerId: env.DISPATCH_DISPATCHER_WORKER_ID ?? env.HOSTNAME ?? `dispatch-${process.pid}`,
     executionMaintenanceBatchSize: readPositiveInteger(env.DISPATCH_EXECUTION_MAINTENANCE_BATCH_SIZE, 100),
