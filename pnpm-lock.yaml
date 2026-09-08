@@ -21,25 +21,25 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^2.1.1
-        version: 2.1.1(hono@4.13.5)
+        version: 2.1.1(hono@4.13.7)
       '@hono/swagger-ui':
         specifier: ^0.6.1
-        version: 0.6.1(hono@4.13.5)
+        version: 0.6.1(hono@4.13.7)
       '@hono/zod-openapi':
-        specifier: ^1.6.2
-        version: 1.6.2(hono@4.13.5)(zod@4.5.4)
+        specifier: ^1.6.3
+        version: 1.6.3(hono@4.13.7)(zod@4.5.4)
       '@kubernetes/client-node':
         specifier: ^2.0.0
         version: 2.0.0
       '@opencode-ai/sdk':
-        specifier: ^1.18.27
-        version: 1.18.27
+        specifier: ^1.18.29
+        version: 1.18.29
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.23.0)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.5
+        specifier: ^4.13.7
+        version: 4.13.7
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -286,8 +286,8 @@ packages:
     peerDependencies:
       hono: '>=4.0.0'
 
-  '@hono/zod-openapi@1.6.2':
-    resolution: {integrity: sha512-ktnBqVgvIlopiiB9ab6hqoYefhcb0DUZU5QJ1F5UtDu8w6+cIORENz93sTZT6G0mQNes0/TbbadfrOpdehioPA==}
+  '@hono/zod-openapi@1.6.3':
+    resolution: {integrity: sha512-VYR82Y60plu8g3pN60OUXMVKpmxh3R04Qs++3DY9vtwZ9/sA/BRY0PcRIR+Z37/3itWtM7pYwT9bKiH9JhqV6Q==}
     engines: {node: '>=16.0.0'}
     peerDependencies:
       hono: '>=4.10.0'
@@ -341,8 +341,8 @@ packages:
       '@emnapi/core': ^1.7.1 || ^2.0.0-alpha.4
       '@emnapi/runtime': ^1.7.1 || ^2.0.0-alpha.4
 
-  '@opencode-ai/sdk@1.18.27':
-    resolution: {integrity: sha512-VTfAB9SWaGiMtI2L9rf2xl+0fTYDMHB2pHYKCquWG5OIX3rHvth9oM915d9Z38IuPZUZkmdNMVz2iAdxG4IR+A==}
+  '@opencode-ai/sdk@1.18.29':
+    resolution: {integrity: sha512-4CS+FoLPkymTlcga8jxivGDDb2AbWMIIl3b8+myoe2wtv/1ANYCErslgz1xy5hTVHymWE6CtVNKzRuPU0ED57A==}
 
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -1110,8 +1110,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.13.5:
-    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
+  hono@4.13.7:
+    resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
     engines: {node: '>=16.9.0'}
 
   hpagent@1.2.0:
@@ -1902,25 +1902,25 @@ snapshots:
       protobufjs: 7.6.1
       yargs: 17.7.3
 
-  '@hono/node-server@2.1.1(hono@4.13.5)':
+  '@hono/node-server@2.1.1(hono@4.13.7)':
     dependencies:
-      hono: 4.13.5
+      hono: 4.13.7
 
-  '@hono/swagger-ui@0.6.1(hono@4.13.5)':
+  '@hono/swagger-ui@0.6.1(hono@4.13.7)':
     dependencies:
-      hono: 4.13.5
+      hono: 4.13.7
 
-  '@hono/zod-openapi@1.6.2(hono@4.13.5)(zod@4.5.4)':
+  '@hono/zod-openapi@1.6.3(hono@4.13.7)(zod@4.5.4)':
     dependencies:
       '@asteasolutions/zod-to-openapi': 9.1.0(zod@4.5.4)
-      '@hono/zod-validator': 0.9.1(hono@4.13.5)(zod@4.5.4)
-      hono: 4.13.5
+      '@hono/zod-validator': 0.9.1(hono@4.13.7)(zod@4.5.4)
+      hono: 4.13.7
       openapi3-ts: 4.6.1
       zod: 4.5.4
 
-  '@hono/zod-validator@0.9.1(hono@4.13.5)(zod@4.5.4)':
+  '@hono/zod-validator@0.9.1(hono@4.13.7)(zod@4.5.4)':
     dependencies:
-      hono: 4.13.5
+      hono: 4.13.7
       zod: 4.5.4
 
   '@isaacs/cliui@8.0.2':
@@ -1990,7 +1990,7 @@ snapshots:
       '@tybys/wasm-util': 0.10.3
     optional: true
 
-  '@opencode-ai/sdk@1.18.27':
+  '@opencode-ai/sdk@1.18.29':
     dependencies:
       cross-spawn: 7.0.6
 
@@ -2590,7 +2590,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.13.5: {}
+  hono@4.13.7: {}
 
   hpagent@1.2.0: {}
 
