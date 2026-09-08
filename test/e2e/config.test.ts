@@ -127,6 +127,24 @@ describe("loadConfig", () => {
     })).toThrow(/timer delay/);
   });
 
+  it("rejects revision resolver lease durations that overflow Node timers", () => {
+    expect(() => loadConfig({
+      DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS: "3000000000",
+    })).toThrow(/timer delay/);
+  });
+
+  it("rejects issue acknowledgment lease durations that overflow Node timers", () => {
+    expect(() => loadConfig({
+      DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS: "3000000000",
+    })).toThrow(/timer delay/);
+  });
+
+  it("rejects schedule worker lease durations that overflow Node timers", () => {
+    expect(() => loadConfig({
+      DISPATCH_SCHEDULE_WORKER_LEASE_DURATION_MS: "3000000000",
+    })).toThrow(/timer delay/);
+  });
+
   it("requires revision requests to finish before lease expiry", () => {
     expect(() => loadConfig({
       DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS: "1000",
