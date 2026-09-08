@@ -121,6 +121,12 @@ describe("loadConfig", () => {
     })).toThrow(/must be less/);
   });
 
+  it("rejects dispatcher lease durations that overflow Node timers", () => {
+    expect(() => loadConfig({
+      DISPATCH_DISPATCHER_LEASE_DURATION_MS: "3000000000",
+    })).toThrow(/timer delay/);
+  });
+
   it("requires revision requests to finish before lease expiry", () => {
     expect(() => loadConfig({
       DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS: "1000",
