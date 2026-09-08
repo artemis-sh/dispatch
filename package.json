@@ -29,11 +29,11 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@hono/swagger-ui": "^0.6.1",
-    "@hono/zod-openapi": "^1.6.2",
+    "@hono/zod-openapi": "^1.6.3",
     "@kubernetes/client-node": "^2.0.0",
-    "@opencode-ai/sdk": "^1.18.27",
+    "@opencode-ai/sdk": "^1.18.29",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.13.5",
+    "hono": "^4.13.7",
     "pg": "^8.23.0",
     "prom-client": "^15.1.3",
     "zod": "^4.5.4"
