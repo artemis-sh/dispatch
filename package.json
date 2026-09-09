@@ -31,7 +31,7 @@
     "@hono/swagger-ui": "^0.6.1",
     "@hono/zod-openapi": "^1.6.3",
     "@kubernetes/client-node": "^2.0.0",
-    "@opencode-ai/sdk": "^1.18.29",
+    "@opencode-ai/sdk": "^1.18.30",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.7",
     "pg": "^8.23.0",
