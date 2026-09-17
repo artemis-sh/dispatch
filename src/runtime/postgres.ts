@@ -2292,7 +2292,10 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
                 opencode_session_id = COALESCE($19, opencode_session_id)
             WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
               AND fencing_token = $4 AND lease_owner = $5 AND state = $9
-            RETURNING execution_id
+              AND lease_expires_at > clock_timestamp()
+            -- Recheck after row-level triggers have run. If they delay this update past
+            -- expiry, the transaction is rolled back rather than persisting the attempt.
+            RETURNING execution_id, $21::timestamptz > clock_timestamp() AS lease_live
           ), updated_execution AS (
             UPDATE dispatch_executions
             SET state = $10, result = $11::jsonb,
@@ -2301,7 +2304,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
                 completed_at = CASE WHEN $12 THEN $7 ELSE NULL END,
                 updated_at = $7
             WHERE id = $1 AND tenant_id = $2 AND state = $13
-              AND EXISTS (SELECT 1 FROM updated_attempt)
+              AND EXISTS (SELECT 1 FROM updated_attempt WHERE lease_live)
             RETURNING id, updated_at
           ), inserted_transition AS (
             INSERT INTO dispatch_execution_transitions
@@ -2320,11 +2323,15 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           command.targetAttemptState, now, terminalAttempt, command.expectedAttemptState, command.targetExecutionState,
           JSON.stringify(command.result ?? null), terminalExecution, command.expectedExecutionState, randomUUID(), command.actor,
           command.reason, JSON.stringify({}), command.workloadName ?? null, command.opencodeSessionId ?? null,
-          command.retryDelayMs ?? 0,
+          command.retryDelayMs ?? 0, attempt.lease_expires_at,
         ],
       });
       if (updated.rowCount !== 1) {
         await client.query("ROLLBACK");
+        const mutationClock = await client.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+        if (mutationClock.rows[0]?.now && attempt.lease_expires_at <= mutationClock.rows[0].now) {
+          return { applied: false, reason: "LEASE_EXPIRED" };
+        }
         return { applied: false, reason: "STATE_MISMATCH" };
       }
       await client.query("COMMIT");

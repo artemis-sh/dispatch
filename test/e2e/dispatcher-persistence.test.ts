@@ -525,6 +525,47 @@ describe("dispatcher persistence", () => {
     expect(persisted.attempts[0]).toMatchObject({ state: "FAILED", lease_owner: null, lease_expires_at: null });
   });
 
+  it("does not persist a leased transition delayed past its expiry", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 500 });
+    if (!claimed) throw new Error("Expected execution to be claimed");
+    const triggerName = `delay_leased_transition_${randomUUID().replaceAll("-", "")}`;
+    const functionName = `${triggerName}_fn`;
+    await pool.query(`
+      CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM pg_sleep(0.6);
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${triggerName}
+      BEFORE UPDATE ON dispatch_execution_attempts
+      FOR EACH ROW WHEN (OLD.execution_id = '${executionId}')
+      EXECUTE FUNCTION ${functionName}();
+    `);
+    const before = await executionSnapshot(executionId);
+
+    try {
+      await expect(store.transitionLeasedExecution({
+        executionId,
+        tenantId: "default",
+        attempt: claimed.lease.attempt,
+        fencingToken: claimed.lease.fencingToken,
+        leaseOwner: claimed.lease.leaseOwner,
+        expectedExecutionState: "PROVISIONING",
+        expectedAttemptState: "LEASED",
+        targetExecutionState: "FAILED",
+        targetAttemptState: "FAILED",
+        actor: "dispatcher-a",
+        reason: "delayed failure",
+      })).resolves.toEqual({ applied: false, reason: "LEASE_EXPIRED" });
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS ${triggerName} ON dispatch_execution_attempts; DROP FUNCTION IF EXISTS ${functionName}();`);
+    }
+
+    expect(await executionSnapshot(executionId)).toEqual(before);
+  });
+
   it("authorizes leased timeout transitions with the database deadline", async () => {
     const executionId = await queueExecution();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
