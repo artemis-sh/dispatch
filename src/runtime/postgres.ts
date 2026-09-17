@@ -2437,10 +2437,15 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         const effect = await client.query<{ state: string }>(`SELECT state FROM dispatch_github_pull_request_effects
           WHERE tenant_id = $1 AND execution_id = $2 FOR UPDATE`, [command.tenantId, command.executionId]);
         if (effect.rowCount !== 1) {
-          await client.query(`UPDATE dispatch_execution_attempts SET state = 'FAILED', finished_at = $6,
+          const failedAttempt = await client.query(`UPDATE dispatch_execution_attempts SET state = 'FAILED', finished_at = $6,
             lease_owner = NULL, lease_expires_at = NULL WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
-            AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'`,
+            AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'
+            AND lease_expires_at > clock_timestamp()`,
           [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, now]);
+          if (failedAttempt.rowCount !== 1) {
+            await client.query("ROLLBACK");
+            return { applied: false, reason: "LEASE_EXPIRED" };
+          }
           await client.query(`UPDATE dispatch_executions SET state = 'FAILED', result = $3::jsonb, completed_at = $4,
             updated_at = $4 WHERE id = $1 AND tenant_id = $2 AND state = 'RUNNING'`,
           [command.executionId, command.tenantId, JSON.stringify({ error: "MISSING_REQUIRED_GITHUB_PR_EFFECT", output: command.result }), now]);
