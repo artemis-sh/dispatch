@@ -687,7 +687,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       ]);
       const resolutionResult = await client.query<RevisionResolutionRow>(`SELECT * FROM dispatch_event_revision_resolutions
         WHERE event_id = $1 AND tenant_id = $2 AND state = 'LEASED' AND lease_owner = $3 AND lease_token = $4
-          AND lease_expires_at > now() FOR UPDATE`, [input.eventId, input.tenantId, input.leaseOwner, input.leaseToken]);
+          AND lease_expires_at > clock_timestamp() FOR UPDATE`, [input.eventId, input.tenantId, input.leaseOwner, input.leaseToken]);
       const resolution = resolutionResult.rows[0];
       if (!resolution) {
         await client.query("ROLLBACK");
@@ -740,9 +740,16 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         admittedAt: input.resolvedAt,
       };
       const created = await this.createExecutions(client, command, candidates.rows, true);
-      await client.query(`UPDATE dispatch_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
+      const completed = await client.query(`UPDATE dispatch_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
-        WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
+        WHERE event_id = $1 AND tenant_id = $2 AND state = 'LEASED' AND lease_owner = $5 AND lease_token = $6
+          AND lease_expires_at > clock_timestamp()`, [
+        input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt), input.leaseOwner, input.leaseToken,
+      ]);
+      if (completed.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
       await client.query("COMMIT");
       for (const execution of created) executionsCreated.inc({ tenant: execution.tenantId, binding_id: execution.binding.id, profile_id: execution.profile.id });
       return { event: eventSummary(eventRow), executions: created, wakes: await loadEventWakes(client, input.tenantId, input.eventId), pendingWakes: await loadEventWakeIntents(client, input.tenantId, input.eventId), replayed: false };
