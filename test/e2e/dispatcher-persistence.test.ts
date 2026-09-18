@@ -852,6 +852,52 @@ describe("dispatcher persistence", () => {
     expect(detail?.attempts[0]).not.toHaveProperty("leaseOwner");
   });
 
+  it("rejects cancellation acknowledgement when its lease expires during the attempt update", async () => {
+    const executionId = await queueExecution();
+    const triggerSuffix = randomUUID().replaceAll("-", "_");
+    const triggerFunction = `delay_cancellation_ack_${triggerSuffix}`;
+    const triggerName = `delay_cancellation_ack_${triggerSuffix}`;
+    await pool.query(`CREATE FUNCTION ${triggerFunction}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM pg_sleep(0.2);
+        RETURN NEW;
+      END
+    $$`);
+    await pool.query(`CREATE TRIGGER ${triggerName}
+      BEFORE UPDATE ON dispatch_execution_attempts
+      FOR EACH ROW WHEN (OLD.execution_id = '${executionId}' AND NEW.state = 'CANCELLED')
+      EXECUTE FUNCTION ${triggerFunction}()`);
+
+    try {
+      const claimed = await store.claimNextQueuedExecution({
+        leaseOwner: "dispatcher-expiring-ack", leaseDurationMs: 100,
+      });
+      if (!claimed) throw new Error("Expected execution attempt");
+      await store.requestExecutionCancellation({
+        actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
+        tenantId: "default", transitionId: randomUUID(),
+      });
+      await pool.query(
+        "UPDATE dispatch_execution_attempts SET lease_expires_at = clock_timestamp() + interval '100 milliseconds' WHERE execution_id = $1",
+        [executionId],
+      );
+
+      await expect(store.acknowledgeLeasedExecutionCancellation({
+        actor: "dispatcher-expiring-ack", attempt: claimed.lease.attempt, executionId,
+        fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner,
+        reason: "stopped", tenantId: "default",
+      })).resolves.toEqual({ applied: false, reason: "LEASE_EXPIRED" });
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS ${triggerName} ON dispatch_execution_attempts`);
+      await pool.query(`DROP FUNCTION IF EXISTS ${triggerFunction}()`);
+    }
+
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution.state).toBe("CANCEL_REQUESTED");
+    expect(persisted.attempts).toMatchObject([{ state: "LEASED", lease_owner: "dispatcher-expiring-ack" }]);
+    expect(persisted.transitions.filter((transition) => transition.to_state === "CANCELLED")).toEqual([]);
+  });
+
   it("lists expired cancellation cleanup without mutating it", async () => {
     const executionId = await queueExecution();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-expiring", leaseDurationMs: 60_000 });
