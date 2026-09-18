@@ -1838,6 +1838,11 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         await client.query("ROLLBACK");
         return { applied: false, reason: "STATE_MISMATCH" };
       }
+      const mutationClock = await client.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+      if (attempt.lease_expires_at <= mutationClock.rows[0]!.now) {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "LEASE_EXPIRED" };
+      }
       await client.query("COMMIT");
       return { applied: true };
     } catch (error) {
