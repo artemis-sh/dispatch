@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizeGitHubEvent } from "../../src/connectors/github/index.js";
@@ -420,6 +421,54 @@ describe("revision resolution persistence", () => {
     });
 
     expect(applied).toBe(false);
+    expect(await store.claimRevisionResolution({ leaseOwner: "resolver-2", leaseDurationMs: 60_000 })).toMatchObject({ eventId, tenantId });
+  });
+
+  it("does not complete after its lease expires while waiting for the trigger lock", async () => {
+    const tenantId = "default";
+    const triggerId = `trigger-${randomUUID()}`;
+    const admittedAt = new Date().toISOString();
+    await store.createTrigger({
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
+      createdAt: admittedAt, disabledAt: null, enabled: true, id: triggerId, tenantId, type: "github.app.webhook",
+    });
+    await store.publishProfileVersion({
+      createdAt: admittedAt,
+      definition: { schemaVersion: 1, runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } }, sandbox: { templateName: "opencode", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 3600 },
+      id: randomUUID(), profileId: "developer", tenantId, version: 1,
+    });
+    await store.publishBindingVersion({
+      bindingId: `develop-${randomUUID()}`, createdAt: admittedAt, disabledAt: null, enabled: true, id: randomUUID(), tenantId, triggerId, version: 1,
+      profile: { id: "developer", version: 1 },
+      definition: { schemaVersion: 1, eventTypes: ["com.github.issues.opened"], filter: { all: [] }, prompt: { literal: "Develop", includeEvent: "data" }, workspace: { type: "git", repository: { url: { path: "/repository/cloneUrl" } }, revision: { commit: { path: "/repository/defaultBranchRevision/commit" } } } },
+    });
+    const event = {
+      specversion: "1.0" as const, id: randomUUID(), source: "https://github.com/acme/widgets", type: "com.github.issues.opened",
+      datacontenttype: "application/json", data: { schemaVersion: 1, installationId: 44, repository: { id: 10, fullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", defaultBranch: "main", private: false }, issue: { number: 7 } },
+    };
+    const eventId = randomUUID();
+    await store.admitEvent({
+      tenantId, triggerId, internalEventId: eventId, event, sourceDeduplicationKey: randomUUID(), admittedAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId, event } as JsonValue), revisionResolverEnabled: true,
+      revisionResolution: { provider: "github", installationId: 44, repositoryId: 10, repositoryFullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", branch: "main" },
+    });
+    const claim = await store.claimRevisionResolution({ leaseOwner: "resolver-1", leaseDurationMs: 100 });
+    expect(claim).toMatchObject({ eventId, tenantId });
+    const pool = store as unknown as { pool: { connect(): Promise<PoolClient> } };
+    const lockHolder = await pool.pool.connect();
+    try {
+      await lockHolder.query("BEGIN");
+      await lockHolder.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`control-trigger:${tenantId}:${triggerId}`]);
+      const completion = store.completeRevisionResolution({
+        eventId, tenantId, leaseOwner: claim!.leaseOwner, leaseToken: claim!.leaseToken,
+        commit: "a".repeat(40), resolvedAt: new Date().toISOString(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await lockHolder.query("COMMIT");
+      expect(await completion).toBeUndefined();
+    } finally {
+      lockHolder.release();
+    }
     expect(await store.claimRevisionResolution({ leaseOwner: "resolver-2", leaseDurationMs: 60_000 })).toMatchObject({ eventId, tenantId });
   });
 
