@@ -96,6 +96,15 @@ describe("loadConfig", () => {
     })).toMatchObject({ githubIssueAcknowledgmentEnabled: true });
   });
 
+  it("rejects issue acknowledgment retry delays above the outbox cap", () => {
+    expect(loadConfig({
+      DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS: "300000",
+    }).githubIssueAcknowledgmentRetryDelayMs).toBe(300_000);
+    expect(() => loadConfig({
+      DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS: "300001",
+    })).toThrow(/DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS.*at most 300000/);
+  });
+
   it("provides disabled schedule worker defaults", () => {
     expect(loadConfig({ HOSTNAME: "worker-1" })).toMatchObject({
       scheduleWorkerEnabled: false,
