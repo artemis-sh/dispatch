@@ -314,6 +314,32 @@ describe("GitHub token broker", () => {
     ]);
   });
 
+  it("does not forward a cross-repository PR after effect registration rejects it", async () => {
+    let upstreamCalls = 0;
+    const control = await listen(http.createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      expect(body).toMatchObject({ repositoryId: 7, request: { owner: "acme", repo: "other" } });
+      response.writeHead(409, { "content-type": "application/json" }).end('{"error":"Effect registration rejected"}');
+    }));
+    running.push(control);
+    const upstream = await listen(http.createServer((_request, response) => {
+      upstreamCalls += 1;
+      response.writeHead(200).end();
+    }));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0, repositoryId: 7,
+      effect: { endpoint: `http://127.0.0.1:${control.port}/`, executionId: "execution-1", token: "fence" } }, { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+
+    const response = await fetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "create_pull_request", arguments: { owner: "acme", repo: "other", title: "PR", head: "feature", base: "main" } },
+    }) });
+    expect(response.status).toBe(502);
+    expect(upstreamCalls).toBe(0);
+  });
+
   it("exposes and executes a fenced workspace file push", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dispatch-broker-"));
     temporaryDirectories.push(directory);

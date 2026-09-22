@@ -12,7 +12,7 @@ const reportSchema = z.object({
 }).strict();
 
 export type GitHubEffectStore = {
-  registerGitHubPullRequestEffect(command: { baseRef: string; executionId: string; fencingToken: string; headRef: string; pullRequestTitle: string; registeredAt: string; repositoryFullName: string; repositoryId: number; requestHash: string; tenantId: string }): Promise<{ created: boolean; id: string; state: string }>;
+  registerGitHubPullRequestEffect(command: { baseRef: string; executionId: string; fencingToken: string; headRef: string; pullRequestTitle: string; registeredAt: string; repositoryFullName: string; repositoryId: number; requestHash: string; requestOwner: string; requestRepo: string; tenantId: string }): Promise<{ created: boolean; id: string; state: string }>;
   reportGitHubPullRequestEffect(command: { effectId: string; executionId: string; fencingToken: string; githubPullRequestId: string; pullRequestNumber: number; pullRequestUrl: string; reportedAt: string; tenantId: string }): Promise<{ id: string; state: string }>;
   listGitHubIssueLifecycles(command: { executionId: string; fencingToken: string; repositoryId: number; tenantId: string }): Promise<unknown[]>;
 };
@@ -27,6 +27,7 @@ export function mountGitHubEffectsApi(app: OpenAPIHono<any>, store: GitHubEffect
     try {
       const result = await store.registerGitHubPullRequestEffect({ ...parsed.data, tenantId: "default", fencingToken: token,
         baseRef: parsed.data.request.base, headRef: parsed.data.request.head, pullRequestTitle: parsed.data.request.title,
+        requestOwner: parsed.data.request.owner, requestRepo: parsed.data.request.repo,
         requestHash: hashCanonicalJson(JSON.parse(JSON.stringify(parsed.data.request))), registeredAt: new Date().toISOString() });
       return context.json(result, 200);
     } catch { return context.json({ error: "Effect registration rejected" }, 409); }

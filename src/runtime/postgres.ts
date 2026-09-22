@@ -1148,7 +1148,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
 
   async registerGitHubPullRequestEffect(command: {
     baseRef: string; executionId: string; fencingToken: string; headRef: string; pullRequestTitle: string; registeredAt: string; repositoryFullName: string;
-    repositoryId: number; requestHash: string; tenantId: string;
+    repositoryId: number; requestHash: string; requestOwner: string; requestRepo: string; tenantId: string;
   }): Promise<{ created: boolean; id: string; state: string }> {
     const client = await this.pool.connect();
     try {
@@ -1165,6 +1165,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const repository = jsonObject(jsonObject(execution.rows[0].data, "event data").repository, "event repository");
       if (repository.id !== command.repositoryId || typeof repository.fullName !== "string"
         || repository.fullName.toLowerCase() !== command.repositoryFullName.toLowerCase()) throw new Error("Effect repository does not match execution origin");
+      if (repository.fullName.toLowerCase() !== `${command.requestOwner}/${command.requestRepo}`.toLowerCase()) {
+        throw new Error("Pull request request repository does not match execution origin");
+      }
       const existing = await client.query<{ id: string; request_hash: string; state: string }>(
         "SELECT id,request_hash,state FROM dispatch_github_pull_request_effects WHERE tenant_id=$1 AND execution_id=$2 AND state IN ('REGISTERED','REPORTED','CONFIRMED') FOR UPDATE",
         [command.tenantId, command.executionId],
