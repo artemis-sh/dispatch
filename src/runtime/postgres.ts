@@ -400,7 +400,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         while (nextFireAt < currentMinute) {
           nextFireAt = nextCronOccurrence(trigger.config.expression, nextFireAt);
         }
-        if (nextFireAt <= now) {
+        const occurrenceIsDue = nextFireAt <= now;
+        if (occurrenceIsDue) {
           const occurrence = await client.query(`INSERT INTO dispatch_schedule_occurrences
             (id, tenant_id, trigger_id, scheduled_at, state, available_at, created_at, updated_at)
             VALUES ($1,$2,$3,$4,'PENDING',$5,$5,$5) ON CONFLICT (tenant_id, trigger_id, scheduled_at) DO NOTHING`,
@@ -409,7 +410,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         }
         await client.query(`UPDATE dispatch_schedule_states SET next_fire_at=$3, updated_at=$4
           WHERE tenant_id=$1 AND trigger_id=$2`, [row.tenant_id, row.trigger_id,
-          nextCronOccurrence(trigger.config.expression, nextFireAt), now]);
+          occurrenceIsDue ? nextCronOccurrence(trigger.config.expression, nextFireAt) : nextFireAt, now]);
       }
       await client.query("COMMIT");
       return materialized;
