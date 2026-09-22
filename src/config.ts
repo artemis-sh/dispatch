@@ -1,5 +1,7 @@
 import type { SandboxClaimAPIVersion } from "./sandbox/types.js";
 
+const GITHUB_ISSUE_ACKNOWLEDGMENT_MAX_RETRY_DELAY_MS = 5 * 60_000;
+
 export type Config = {
   adminToken?: string;
   dispatcherEnabled: boolean;
@@ -103,6 +105,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.githubIssueAcknowledgmentRequestTimeoutMs >= config.githubIssueAcknowledgmentLeaseDurationMs) {
     throw new Error("DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS must be less than DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS");
+  }
+  if (config.githubIssueAcknowledgmentRetryDelayMs > GITHUB_ISSUE_ACKNOWLEDGMENT_MAX_RETRY_DELAY_MS) {
+    throw new Error(`DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS must be at most ${GITHUB_ISSUE_ACKNOWLEDGMENT_MAX_RETRY_DELAY_MS}`);
   }
   return config;
 }
