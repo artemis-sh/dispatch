@@ -444,7 +444,10 @@ export function startBroker(config, provider) {
         effect = await effectRequest(config, "/internal/v1/github/pull-request-effects", {
           executionId: config.effect.executionId, repositoryId: config.repositoryId, repositoryFullName: `${createArguments.owner}/${createArguments.repo}`, request: createArguments,
         });
-        if (effect.created !== true) throw new Error("PULL_REQUEST_EFFECT_ALREADY_REGISTERED");
+        // A prior attempt may have registered the effect but failed before it could
+        // create and report the PR. Reuse that registration so a retry can recover.
+        // Reported effects remain fenced to prevent creating a second PR.
+        if (effect.created !== true && effect.state !== "REGISTERED") throw new Error("PULL_REQUEST_EFFECT_ALREADY_REGISTERED");
       }
       const upstream = await forward(request, body, config, provider, controller.signal);
       if (createArguments) {
