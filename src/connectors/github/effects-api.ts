@@ -18,7 +18,7 @@ export type GitHubEffectStore = {
 };
 
 export function mountGitHubEffectsApi(app: OpenAPIHono<any>, store: GitHubEffectStore): void {
-  app.use("/internal/v1/github/*", bodyLimit({ maxSize: 64 * 1024, onError: (context) => context.json({ error: "Request body too large" }, 413) }));
+  app.use("/internal/v1/github/*", bodyLimit({ maxSize: 128 * 1024, onError: (context) => context.json({ error: "Request body too large" }, 413) }));
   app.post("/internal/v1/github/pull-request-effects", async (context) => {
     const token = bearer(context.req.header("authorization"));
     if (!token) return context.json({ error: "Unauthorized" }, 401);
