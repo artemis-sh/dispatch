@@ -60,6 +60,33 @@ describe("supplied wake context persistence", () => {
     expect(claimed.executionId).toBe(executionId);
   });
 
+  it("does not fail a PR lifecycle turn when its lease expires waiting for the required effect", async () => {
+    const executionId = await createDeveloper({ requireGitHubPullRequestEffect: true });
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: `expired-effect-${randomUUID()}`, leaseDurationMs: 100 });
+    if (!claimed || claimed.executionId !== executionId) throw new Error("Expected developer claim");
+    await store.transitionLeasedExecution({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
+      expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING", fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId: "default" });
+
+    const lockHolder = await pool.connect();
+    await lockHolder.query("BEGIN");
+    await lockHolder.query("LOCK TABLE dispatch_github_pull_request_effects IN ACCESS EXCLUSIVE MODE");
+    try {
+      const completion = store.completeLeasedExecutionTurn({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
+        fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner, reason: "done", result: null, tenantId: "default" });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await lockHolder.query("COMMIT");
+
+      await expect(completion).resolves.toEqual({ applied: false, reason: "LEASE_EXPIRED" });
+    } finally {
+      lockHolder.release();
+    }
+
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "RUNNING" });
+    expect((await pool.query("select state from dispatch_execution_attempts where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "RUNNING" });
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_transitions where execution_id=$1 and to_state='FAILED'", [executionId])).rows[0]).toEqual({ count: 0 });
+  });
+
   it("allows a registered effect to await later signed PR confirmation", async () => {
     const executionId = await createDeveloper({ requireGitHubPullRequestEffect: true });
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: `registered-effect-${randomUUID()}`, leaseDurationMs: 60_000 });
