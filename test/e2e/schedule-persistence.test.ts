@@ -67,6 +67,20 @@ describe("schedule persistence", () => {
     expect(occurrence?.scheduledAt).toBe("2026-09-01T12:02:00.000Z");
   });
 
+  it("retains the first future sparse-cron occurrence after recovery", async () => {
+    const recovery = new Date("2026-09-01T19:19:30.000Z");
+    const triggerId = `sparse-recovery-${randomUUID()}`;
+    await store.createTrigger({ id: triggerId, tenantId: "default", type: "schedule.cron", enabled: true,
+      createdAt: "2026-09-01T18:18:00.000Z", disabledAt: null,
+      config: { schemaVersion: 1, expression: "17 * * * *", timezone: "UTC", misfirePolicy: "skip",
+        repository: { installationId: 44, id: 10, fullName: "acme/widgets", defaultBranch: "main" } } });
+
+    expect(await store.materializeDueScheduleOccurrences({ now: recovery.toISOString(), limit: 100 })).toBe(0);
+    expect(await store.materializeDueScheduleOccurrences({ now: "2026-09-01T20:17:30.000Z", limit: 100 })).toBe(1);
+    const occurrence = await store.claimScheduleOccurrence({ leaseOwner: "scheduler", leaseDurationMs: 60_000 });
+    expect(occurrence?.scheduledAt).toBe("2026-09-01T20:17:00.000Z");
+  });
+
   it("does not lease a materialized occurrence after its trigger is disabled", async () => {
     const now = new Date();
     const triggerId = `disabled-${randomUUID()}`;
