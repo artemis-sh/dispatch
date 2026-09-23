@@ -1244,9 +1244,24 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         if (row.state === "REPORTED") await this.reconcileGitHubPullRequestEffects(command.tenantId, { repositoryId: undefined, githubPullRequestId: command.githubPullRequestId, pullRequestNumber: command.pullRequestNumber });
         return { id: command.effectId, state: row.state };
       }
-      await client.query(`UPDATE dispatch_github_pull_request_effects SET state='REPORTED',github_pull_request_id=$3,
-        pull_request_number=$4,pull_request_url=$5,attempted_at=$6 WHERE tenant_id=$1 AND id=$2`,
-      [command.tenantId, command.effectId, command.githubPullRequestId, command.pullRequestNumber, command.pullRequestUrl, new Date(command.reportedAt)]);
+      const reported = await client.query(`UPDATE dispatch_github_pull_request_effects effect SET state='REPORTED',github_pull_request_id=$5,
+        pull_request_number=$6,pull_request_url=$7,attempted_at=$8
+        FROM dispatch_execution_attempts attempt
+        JOIN dispatch_executions execution ON execution.id=attempt.execution_id AND execution.tenant_id=attempt.tenant_id
+        WHERE effect.tenant_id=$1 AND effect.id=$2 AND effect.execution_id=$3
+          AND attempt.execution_id=effect.execution_id AND attempt.tenant_id=effect.tenant_id AND attempt.fencing_token=$4
+          AND execution.state IN ('PROVISIONING','RUNNING')
+          AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
+          AND effect.state='REGISTERED'`,
+      [command.tenantId, command.effectId, command.executionId, command.fencingToken, command.githubPullRequestId, command.pullRequestNumber, command.pullRequestUrl, new Date(command.reportedAt)]);
+      if (reported.rowCount !== 1) throw new Error("Execution effect capability is invalid");
+      const currentLease = await client.query(`SELECT 1 FROM dispatch_execution_attempts attempt
+        JOIN dispatch_executions execution ON execution.id=attempt.execution_id AND execution.tenant_id=attempt.tenant_id
+        WHERE attempt.tenant_id=$1 AND attempt.execution_id=$2 AND attempt.fencing_token=$3
+          AND execution.state IN ('PROVISIONING','RUNNING')
+          AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()`,
+      [command.tenantId, command.executionId, command.fencingToken]);
+      if (currentLease.rowCount !== 1) throw new Error("Execution effect capability is invalid");
       await client.query("COMMIT");
       githubEffects.inc({ tenant: command.tenantId, effect_type: "pull_request", result: "reported" });
       await this.reconcileGitHubPullRequestEffects(command.tenantId, { repositoryId: undefined, githubPullRequestId: command.githubPullRequestId, pullRequestNumber: command.pullRequestNumber });
