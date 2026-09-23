@@ -148,6 +148,33 @@ describe("supplied wake context persistence", () => {
     await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
   });
 
+  it("rolls back a PR effect report when its lease expires during the update", async () => {
+    const executionId = await createDeveloper();
+    const triggerName = `delay_pr_effect_report_${randomUUID().replaceAll("-", "")}`;
+    const functionName = `${triggerName}_fn`;
+    await pool.query(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN PERFORM pg_sleep(0.2); RETURN NEW; END;
+    $$`);
+    await pool.query(`CREATE TRIGGER ${triggerName} BEFORE UPDATE ON dispatch_github_pull_request_effects
+      FOR EACH ROW EXECUTE FUNCTION ${functionName}()`);
+    try {
+      const claimed = await store.claimNextQueuedExecution({ leaseOwner: `expiring-effect-${randomUUID()}`, leaseDurationMs: 100 });
+      if (!claimed || claimed.executionId !== executionId) throw new Error("Expected developer claim");
+      const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: claimed.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
+        registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "PR", head: "feature", base: "main" }), tenantId: "default" });
+
+      await expect(store.reportGitHubPullRequestEffect({ effectId: effect.id, executionId, fencingToken: claimed.lease.fencingToken,
+        githubPullRequestId: "9001", pullRequestNumber: 61, pullRequestUrl: "https://github.com/acme/repo/pull/61", reportedAt: new Date().toISOString(), tenantId: "default" }))
+        .rejects.toThrow("Execution effect capability is invalid");
+      expect((await pool.query("select state,github_pull_request_id,pull_request_number,pull_request_url from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0])
+        .toEqual({ state: "REGISTERED", github_pull_request_id: null, pull_request_number: null, pull_request_url: null });
+      await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
+    } finally {
+      await pool.query(`DROP TRIGGER ${triggerName} ON dispatch_github_pull_request_effects`);
+      await pool.query(`DROP FUNCTION ${functionName}()`);
+    }
+  });
+
   it("rejects PR effect registration and reporting after cancellation is requested", async () => {
     const registrationExecutionId = await createDeveloper();
     const registrationClaim = await store.claimNextQueuedExecution({ leaseOwner: `cancel-registration-${randomUUID()}`, leaseDurationMs: 60_000 });
