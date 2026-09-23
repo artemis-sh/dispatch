@@ -952,7 +952,10 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const inputSequence = continuation ? executionResult.rows[0]!.current_input_sequence + 1 : null;
       const action = continuation ? "CONTINUED" : cancellation ? "CANCELLED" : "COMPLETED";
       const targetState = continuation ? "QUEUED" : cancellation ? "CANCELLED" : "COMPLETED";
-      await client.query("UPDATE dispatch_event_waits SET state = 'CONSUMED', ended_at = $3 WHERE tenant_id = $1 AND id = $2 AND state = 'ACTIVE'", [command.tenantId, item.waitId, now]);
+      const consumed = await client.query(`UPDATE dispatch_event_waits SET state = 'CONSUMED', ended_at = $3
+        WHERE tenant_id = $1 AND id = $2 AND state = 'ACTIVE' AND deadline_at > clock_timestamp()`,
+      [command.tenantId, item.waitId, now]);
+      if (consumed.rowCount !== 1) continue;
       if (continuation) {
         if (wakeAction.type !== "continue") throw new Error("Wake action changed during admission");
         const input = renderPromptInput(wakeAction.prompt, command.event);

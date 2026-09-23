@@ -324,6 +324,45 @@ describe("wake admission persistence", () => {
     expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
   });
 
+  it("does not consume a wait whose deadline elapses before the consume mutation", async () => {
+    const correlation = randomUUID();
+    const executionId = await createWaitingExecution(correlation);
+    await pool.query(`update dispatch_event_waits
+      set deadline_at = clock_timestamp() + interval '1 second'
+      where execution_id = $1`, [executionId]);
+    await publishWakeBinding(`deadline-race-${correlation}`, "work.deadline-race", {
+      type: "continue", prompt: { literal: "Too late.", includeEvent: "data" },
+    });
+    await pool.query(`create function delay_event_wait_consume() returns trigger language plpgsql as $$
+      begin
+        perform pg_sleep(1.25);
+        return null;
+      end
+    $$`);
+    await pool.query(`create trigger delay_event_wait_consume
+      before update on dispatch_event_waits for each statement execute function delay_event_wait_consume()`);
+
+    const startedAt = Date.now();
+    let result: Awaited<ReturnType<typeof store.admitEvent>>;
+    try {
+      result = await store.admitEvent(admissionCommand("work.deadline-race", { key: correlation }));
+    } finally {
+      await pool.query("drop trigger delay_event_wait_consume on dispatch_event_waits");
+      await pool.query("drop function delay_event_wait_consume() ");
+    }
+
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_200);
+    expect(result.wakes).toEqual([]);
+    expect((await pool.query("select state from dispatch_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "ACTIVE" });
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
+
+    expect(await store.expireDueEventWaits({ limit: 1 })).toEqual([
+      expect.objectContaining({ executionId, tenantId: "default" }),
+    ]);
+    expect((await pool.query("select state from dispatch_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "EXPIRED" });
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "TIMED_OUT" });
+  });
+
   async function createWaitingExecution(
     correlation: string,
     workspace: BindingWorkspace = { type: "empty" },
