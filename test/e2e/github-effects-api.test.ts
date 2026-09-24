@@ -18,12 +18,12 @@ describe("GitHub effects API", () => {
         title: "title",
         head: "branch",
         base: "main",
-        body: "x".repeat(65_536),
+        body: "\0".repeat(65_536),
       },
     };
     const raw = JSON.stringify(payload);
 
-    expect(Buffer.byteLength(raw, "utf8")).toBeGreaterThan(64 * 1024);
+    expect(Buffer.byteLength(raw, "utf8")).toBeGreaterThan(128 * 1024);
     const response = await app.request("/internal/v1/github/pull-request-effects", {
       method: "POST",
       headers: { authorization: "Bearer fence", "content-type": "application/json" },
