@@ -1157,7 +1157,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         FROM dispatch_executions execution
         JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
         JOIN dispatch_events event ON event.id=execution.event_id AND event.tenant_id=execution.tenant_id
-        WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+        WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.effect_token=$3
           AND execution.state IN ('PROVISIONING','RUNNING')
           AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
         FOR UPDATE OF execution`, [command.tenantId, command.executionId, command.fencingToken]);
@@ -1192,7 +1192,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     const authorized = await this.pool.query(`SELECT 1 FROM dispatch_executions execution
       JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
       JOIN dispatch_events event ON event.id=execution.event_id AND event.tenant_id=execution.tenant_id
-      WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+      WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.effect_token=$3
         AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
         AND event.data->'repository'->>'id'=$4 LIMIT 1`,
     [command.tenantId, command.executionId, command.fencingToken, String(command.repositoryId)]);
@@ -1230,7 +1230,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         FROM dispatch_github_pull_request_effects effect
         JOIN dispatch_execution_attempts attempt ON attempt.execution_id=effect.execution_id AND attempt.tenant_id=effect.tenant_id
         JOIN dispatch_executions execution ON execution.id=effect.execution_id AND execution.tenant_id=effect.tenant_id
-        WHERE effect.tenant_id=$1 AND effect.id=$2 AND effect.execution_id=$3 AND attempt.fencing_token=$4
+        WHERE effect.tenant_id=$1 AND effect.id=$2 AND effect.execution_id=$3 AND attempt.effect_token=$4
           AND execution.state IN ('PROVISIONING','RUNNING')
           AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
         FOR UPDATE OF effect`,
@@ -1558,8 +1558,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             GROUP BY candidate.id, candidate.tenant_id
           ), inserted_attempt AS (
             INSERT INTO dispatch_execution_attempts
-              (execution_id, tenant_id, attempt, fencing_token, state, lease_owner, lease_expires_at)
-            SELECT id, tenant_id, attempt, $1, 'LEASED', $2,
+              (execution_id, tenant_id, attempt, effect_token, fencing_token, state, lease_owner, lease_expires_at)
+            SELECT id, tenant_id, attempt, $1, $1, 'LEASED', $2,
                    claim_clock.claimed_at + ($3::double precision * interval '1 millisecond')
             FROM next_attempt, claim_clock
             RETURNING execution_id, tenant_id, attempt, fencing_token, state, lease_owner,
