@@ -67,7 +67,7 @@ describe("supplied wake context persistence", () => {
     await store.transitionLeasedExecution({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
       expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING", fencingToken: claimed.lease.fencingToken,
       leaseOwner: claimed.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId: "default" });
-    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: claimed.lease.fencingToken,
+    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", effectToken: claimed.lease.fencingToken, executionId,
       headRef: "dispatch/issue-7", pullRequestTitle: "Fix issue 7", registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo",
       repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "Fix issue 7", head: "dispatch/issue-7", base: "main" }), tenantId: "default" });
     await store.completeLeasedExecutionTurn({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
@@ -123,7 +123,7 @@ describe("supplied wake context persistence", () => {
     const first = await store.claimNextQueuedExecution({ leaseOwner: `effect-worker-${randomUUID()}`, leaseDurationMs: 60_000 });
     if (!first || first.executionId !== executionId) throw new Error("Expected developer claim");
     const request = { owner: "acme", repo: "repo", title: "PR", head: "feature", base: "main" };
-    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: first.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
+    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", effectToken: first.lease.fencingToken, executionId, headRef: "feature", pullRequestTitle: "PR",
       registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default" });
     expect(effect.created).toBe(true);
     await pool.query("update dispatch_execution_attempts set lease_expires_at=now()-interval '1 second' where execution_id=$1", [executionId]);
@@ -132,16 +132,16 @@ describe("supplied wake context persistence", () => {
     const second = await store.claimNextQueuedExecution({ leaseOwner: `effect-recovery-${randomUUID()}`, leaseDurationMs: 60_000 });
     if (!second || second.executionId !== executionId) throw new Error("Expected recovered developer claim");
     expect(second.lease.fencingToken).not.toBe(first.lease.fencingToken);
-    await expect(store.reportGitHubPullRequestEffect({ effectId: effect.id, executionId, fencingToken: first.lease.fencingToken,
+    await expect(store.reportGitHubPullRequestEffect({ effectId: effect.id, effectToken: first.lease.fencingToken, executionId,
       githubPullRequestId: "9001", pullRequestNumber: 61, pullRequestUrl: "https://github.com/acme/repo/pull/61", reportedAt: new Date().toISOString(), tenantId: "default" }))
       .rejects.toThrow("Execution effect capability is invalid");
     expect((await pool.query("select state,github_pull_request_id,pull_request_number,pull_request_url from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0])
       .toEqual({ state: "REGISTERED", github_pull_request_id: null, pull_request_number: null, pull_request_url: null });
 
-    await expect(store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: second.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
+    await expect(store.registerGitHubPullRequestEffect({ baseRef: "main", effectToken: second.lease.fencingToken, executionId, headRef: "feature", pullRequestTitle: "PR",
       registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default" }))
       .resolves.toMatchObject({ created: false, id: effect.id });
-    await store.reportGitHubPullRequestEffect({ effectId: effect.id, executionId, fencingToken: second.lease.fencingToken,
+    await store.reportGitHubPullRequestEffect({ effectId: effect.id, effectToken: second.lease.fencingToken, executionId,
       githubPullRequestId: "9001", pullRequestNumber: 61, pullRequestUrl: "https://github.com/acme/repo/pull/61", reportedAt: new Date().toISOString(), tenantId: "default" });
     expect((await pool.query("select state from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "REPORTED" });
     await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
@@ -154,7 +154,7 @@ describe("supplied wake context persistence", () => {
     if (!registrationClaim || registrationClaim.executionId !== registrationExecutionId) throw new Error("Expected developer claim");
     await store.requestExecutionCancellation({ actor: "test", executionId: registrationExecutionId, reason: "cancel", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
 
-    const registration = { baseRef: "main", executionId: registrationExecutionId, fencingToken: registrationClaim.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
+    const registration = { baseRef: "main", effectToken: registrationClaim.lease.fencingToken, executionId: registrationExecutionId, headRef: "feature", pullRequestTitle: "PR",
       registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "PR", head: "feature", base: "main" }), tenantId: "default" };
     await expect(store.registerGitHubPullRequestEffect(registration)).rejects.toThrow("Execution effect capability is not current");
     expect((await pool.query("select count(*)::int as count from dispatch_github_pull_request_effects where execution_id=$1", [registrationExecutionId])).rows[0]).toEqual({ count: 0 });
@@ -162,10 +162,10 @@ describe("supplied wake context persistence", () => {
     const reportExecutionId = await createDeveloper();
     const reportClaim = await store.claimNextQueuedExecution({ leaseOwner: `cancel-report-${randomUUID()}`, leaseDurationMs: 60_000 });
     if (!reportClaim || reportClaim.executionId !== reportExecutionId) throw new Error("Expected developer claim");
-    const effect = await store.registerGitHubPullRequestEffect({ ...registration, executionId: reportExecutionId, fencingToken: reportClaim.lease.fencingToken });
+    const effect = await store.registerGitHubPullRequestEffect({ ...registration, effectToken: reportClaim.lease.fencingToken, executionId: reportExecutionId });
     await store.requestExecutionCancellation({ actor: "test", executionId: reportExecutionId, reason: "cancel", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
 
-    await expect(store.reportGitHubPullRequestEffect({ effectId: effect.id, executionId: reportExecutionId, fencingToken: reportClaim.lease.fencingToken,
+    await expect(store.reportGitHubPullRequestEffect({ effectId: effect.id, effectToken: reportClaim.lease.fencingToken, executionId: reportExecutionId,
       githubPullRequestId: "9001", pullRequestNumber: 61, pullRequestUrl: "https://github.com/acme/repo/pull/61", reportedAt: new Date().toISOString(), tenantId: "default" }))
       .rejects.toThrow("Execution effect capability is invalid");
     expect((await pool.query("select state,github_pull_request_id,pull_request_number,pull_request_url from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0])
@@ -177,7 +177,7 @@ describe("supplied wake context persistence", () => {
     const executionId = await createDeveloper();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: `recovery-worker-${randomUUID()}`, leaseDurationMs: 60_000 });
     if (!claimed || claimed.executionId !== executionId) throw new Error("Expected developer claim");
-    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: claimed.lease.fencingToken,
+    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", effectToken: claimed.lease.fencingToken, executionId,
       headRef: "dispatch/issue-7", pullRequestTitle: "Fix issue 7", registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo",
       repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "Fix issue 7", head: "dispatch/issue-7", base: "main" }), tenantId: "default" });
     await store.admitEvent(admissionCommand("com.github.pull_request.opened", {

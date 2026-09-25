@@ -1147,7 +1147,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
   }
 
   async registerGitHubPullRequestEffect(command: {
-    baseRef: string; executionId: string; fencingToken: string; headRef: string; pullRequestTitle: string; registeredAt: string; repositoryFullName: string;
+    baseRef: string; effectToken: string; executionId: string; headRef: string; pullRequestTitle: string; registeredAt: string; repositoryFullName: string;
     repositoryId: number; requestHash: string; tenantId: string;
   }): Promise<{ created: boolean; id: string; state: string }> {
     const client = await this.pool.connect();
@@ -1160,7 +1160,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.effect_token=$3
           AND execution.state IN ('PROVISIONING','RUNNING')
           AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
-        FOR UPDATE OF execution`, [command.tenantId, command.executionId, command.fencingToken]);
+        FOR UPDATE OF execution`, [command.tenantId, command.executionId, command.effectToken]);
       if (!execution.rows[0]) throw new Error("Execution effect capability is not current");
       const repository = jsonObject(jsonObject(execution.rows[0].data, "event data").repository, "event repository");
       if (repository.id !== command.repositoryId || typeof repository.fullName !== "string"
@@ -1172,7 +1172,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       if (existing.rows[0]) {
         if (existing.rows[0].request_hash !== command.requestHash) throw new IdempotencyConflictError();
         await client.query(`UPDATE dispatch_github_pull_request_effects SET fence_hash=$3,attempted_at=$4
-          WHERE tenant_id=$1 AND id=$2`, [command.tenantId, existing.rows[0].id, hashCanonicalJson(command.fencingToken), new Date(command.registeredAt)]);
+          WHERE tenant_id=$1 AND id=$2`, [command.tenantId, existing.rows[0].id, hashCanonicalJson(command.effectToken), new Date(command.registeredAt)]);
         await client.query("COMMIT");
         return { created: false, id: existing.rows[0].id, state: existing.rows[0].state };
       }
@@ -1180,7 +1180,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       await client.query(`INSERT INTO dispatch_github_pull_request_effects
         (id,tenant_id,execution_id,repository_id,repository_full_name,request_hash,fence_hash,pull_request_title,head_ref,base_ref,state,created_at,attempted_at)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REGISTERED',$11,$11)`,
-      [id, command.tenantId, command.executionId, String(command.repositoryId), command.repositoryFullName, command.requestHash, hashCanonicalJson(command.fencingToken),
+      [id, command.tenantId, command.executionId, String(command.repositoryId), command.repositoryFullName, command.requestHash, hashCanonicalJson(command.effectToken),
         command.pullRequestTitle, command.headRef, command.baseRef, new Date(command.registeredAt)]);
       await client.query("COMMIT");
       githubEffects.inc({ tenant: command.tenantId, effect_type: "pull_request", result: "registered" });
@@ -1188,14 +1188,14 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
 
-  async listGitHubIssueLifecycles(command: { executionId: string; fencingToken: string; repositoryId: number; tenantId: string }): Promise<unknown[]> {
+  async listGitHubIssueLifecycles(command: { effectToken: string; executionId: string; repositoryId: number; tenantId: string }): Promise<unknown[]> {
     const authorized = await this.pool.query(`SELECT 1 FROM dispatch_executions execution
       JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
       JOIN dispatch_events event ON event.id=execution.event_id AND event.tenant_id=execution.tenant_id
       WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.effect_token=$3
         AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
         AND event.data->'repository'->>'id'=$4 LIMIT 1`,
-    [command.tenantId, command.executionId, command.fencingToken, String(command.repositoryId)]);
+    [command.tenantId, command.executionId, command.effectToken, String(command.repositoryId)]);
     if (authorized.rowCount !== 1) throw new Error("Execution lifecycle capability is not current");
     const result = await this.pool.query<{ issue_number: number; execution_id: string; execution_state: string; binding_id: string; error: string | null; effect_state: string | null; pull_request_number: number | null; updated_at: Date; missing_pr_effect_failures: number }>(`SELECT DISTINCT ON ((event.data->'issue'->>'number')::integer)
         (event.data->'issue'->>'number')::integer AS issue_number, execution.id AS execution_id,
@@ -1220,7 +1220,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
   }
 
   async reportGitHubPullRequestEffect(command: {
-    effectId: string; executionId: string; fencingToken: string; githubPullRequestId: string;
+    effectId: string; effectToken: string; executionId: string; githubPullRequestId: string;
     pullRequestNumber: number; pullRequestUrl: string; reportedAt: string; tenantId: string;
   }): Promise<{ id: string; state: string }> {
     const client = await this.pool.connect();
@@ -1234,9 +1234,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           AND execution.state IN ('PROVISIONING','RUNNING')
           AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
         FOR UPDATE OF effect`,
-      [command.tenantId, command.effectId, command.executionId, command.fencingToken]);
+      [command.tenantId, command.effectId, command.executionId, command.effectToken]);
       const row = effect.rows[0];
-      if (!row || row.fence_hash !== hashCanonicalJson(command.fencingToken)) throw new Error("Execution effect capability is invalid");
+      if (!row || row.fence_hash !== hashCanonicalJson(command.effectToken)) throw new Error("Execution effect capability is invalid");
       validateGitHubPullRequestUrl(command.pullRequestUrl, row.repository_full_name, command.pullRequestNumber);
       if (row.state !== "REGISTERED") {
         if (row.github_pull_request_id !== command.githubPullRequestId || row.pull_request_number !== command.pullRequestNumber || row.pull_request_url !== command.pullRequestUrl) throw new IdempotencyConflictError();

@@ -466,7 +466,7 @@ describe("dispatcher persistence", () => {
     await expect(store.registerGitHubPullRequestEffect({
       baseRef: "main",
       executionId,
-      fencingToken: original.lease.fencingToken,
+      effectToken: original.lease.fencingToken,
       headRef: "dispatch/issue-229",
       pullRequestTitle: "Fix adopted effect capability",
       registeredAt: new Date().toISOString(),
