@@ -501,6 +501,7 @@ export const executionPendingWakes = pgTable("dispatch_execution_pending_wakes",
 export const executionAttempts = pgTable("dispatch_execution_attempts", {
   attempt: integer("attempt").notNull(),
   diagnostic: jsonb("diagnostic").$type<import("../execution/types.js").ExecutionAttemptDiagnostic>(),
+  effectToken: text("effect_token").notNull(),
   executionID: text("execution_id").notNull(),
   fencingToken: text("fencing_token").notNull(),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -529,6 +530,7 @@ export const executionAttempts = pgTable("dispatch_execution_attempts", {
     foreignColumns: [executions.id, executions.tenantID],
     name: "dispatch_execution_attempts_execution_tenant_fk",
   }),
+  uniqueIndex("dispatch_execution_attempts_effect_token_unique").on(table.effectToken),
   uniqueIndex("dispatch_execution_attempts_fencing_token_unique").on(table.fencingToken),
   uniqueIndex("dispatch_execution_attempts_one_active_unique")
     .on(table.executionID)

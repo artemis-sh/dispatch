@@ -289,10 +289,10 @@ immutable offers at their original binding versions and reconciled atomically
 when trusted correlation becomes complete.
 
 The GitHub broker registers `create_pull_request` before forwarding the
-non-idempotent mutation and refuses to forward an existing registration. A
-registered effect may report its result after lease turnover using its original
-one-purpose capability, but an adopted sandbox with a rotated dispatcher fence
-cannot initiate a new PR effect. Ambiguous mutations are not retried.
+non-idempotent mutation and refuses to forward an existing registration. Each
+attempt has a stable, one-purpose effect capability distinct from its rotating
+dispatcher fence, so a checkpointed sandbox retains effect access after
+adoption. Ambiguous mutations are not retried.
 
 GitHub issue events do not contain a default-branch commit. A developer binding
 can select `/repository/defaultBranchRevision/commit`. When such a binding

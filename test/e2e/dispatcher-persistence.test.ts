@@ -441,6 +441,42 @@ describe("dispatcher persistence", () => {
     expect(persisted.transitions).toEqual(before.transitions);
   });
 
+  it("keeps the original effect capability usable after adopting a running attempt", async () => {
+    const executionId = await queueExecution();
+    const original = await startRunningExecution(executionId, "dispatcher-stale", {
+      workloadName: "execution-effect-adoptable",
+      opencodeSessionId: "session-effect-adoptable",
+    });
+    await pool.query(
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      [executionId],
+    );
+
+    const adopted = await store.claimExpiredRunningExecution({ leaseOwner: "dispatcher-adopter", leaseDurationMs: 60_000 });
+    if (!adopted || adopted.executionId !== executionId) throw new Error("Expected execution adoption");
+    expect(adopted.lease.fencingToken).not.toBe(original.lease.fencingToken);
+    expect((await pool.query(
+      "select effect_token, fencing_token from dispatch_execution_attempts where execution_id=$1",
+      [executionId],
+    )).rows[0]).toEqual({
+      effect_token: original.lease.fencingToken,
+      fencing_token: adopted.lease.fencingToken,
+    });
+
+    await expect(store.registerGitHubPullRequestEffect({
+      baseRef: "main",
+      executionId,
+      fencingToken: original.lease.fencingToken,
+      headRef: "dispatch/issue-229",
+      pullRequestTitle: "Fix adopted effect capability",
+      registeredAt: new Date().toISOString(),
+      repositoryFullName: "acme/repo",
+      repositoryId: 7,
+      requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "Fix adopted effect capability", head: "dispatch/issue-229", base: "main" }),
+      tenantId: "default",
+    })).resolves.toMatchObject({ created: true, state: "REGISTERED" });
+  });
+
   it("does not take over live or non-checkpointed running attempts", async () => {
     const liveExecutionId = await queueExecution();
     const live = await startRunningExecution(liveExecutionId, "dispatcher-live", {
@@ -1158,7 +1194,7 @@ describe("dispatcher persistence", () => {
     const createdAt = new Date().toISOString();
     const sequence = ++eventSequence;
     const event = {
-      data: { sequence },
+      data: { sequence, repository: { id: 7, fullName: "acme/repo" } },
       datacontenttype: "application/json",
       id: `event-${sequence}`,
       source: "/test/dispatcher",
