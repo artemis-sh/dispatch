@@ -148,6 +148,33 @@ describe("supplied wake context persistence", () => {
     await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
   });
 
+  it("rolls back PR effect registrations whose lease expires during the effect write", async () => {
+    const request = { owner: "acme", repo: "repo", title: "PR", head: "feature", base: "main" };
+    const insertExecutionId = await createDeveloper();
+    const insertClaim = await store.claimNextQueuedExecution({ leaseOwner: `insert-fence-${randomUUID()}`, leaseDurationMs: 100 });
+    if (!insertClaim || insertClaim.executionId !== insertExecutionId) throw new Error("Expected developer claim");
+    await expect(withDelayedEffectWrite("INSERT", insertExecutionId, () => store.registerGitHubPullRequestEffect({
+      baseRef: "main", executionId: insertExecutionId, fencingToken: insertClaim.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
+      registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default",
+    }))).rejects.toThrow("Execution effect capability is not current");
+    expect((await pool.query("select count(*)::int as count from dispatch_github_pull_request_effects where execution_id=$1", [insertExecutionId])).rows[0]).toEqual({ count: 0 });
+
+    const updateExecutionId = await createDeveloper();
+    const updateClaim = await store.claimNextQueuedExecution({ leaseOwner: `update-fence-${randomUUID()}`, leaseDurationMs: 60_000 });
+    if (!updateClaim || updateClaim.executionId !== updateExecutionId) throw new Error("Expected developer claim");
+    const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", executionId: updateExecutionId, fencingToken: updateClaim.lease.fencingToken,
+      headRef: "feature", pullRequestTitle: "PR", registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default" });
+    const before = (await pool.query<{ attempted_at: Date }>("select attempted_at from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]!;
+    await pool.query("update dispatch_execution_attempts set lease_expires_at=clock_timestamp()+interval '100 milliseconds' where execution_id=$1", [updateExecutionId]);
+    await expect(withDelayedEffectWrite("UPDATE", updateExecutionId, () => store.registerGitHubPullRequestEffect({
+      baseRef: "main", executionId: updateExecutionId, fencingToken: updateClaim.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
+      registeredAt: new Date(Date.now() + 1_000).toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default",
+    }))).rejects.toThrow("Execution effect capability is not current");
+    expect((await pool.query<{ attempted_at: Date }>("select attempted_at from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]!.attempted_at)
+      .toEqual(before.attempted_at);
+    await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);
+  });
+
   it("rejects PR effect registration and reporting after cancellation is requested", async () => {
     const registrationExecutionId = await createDeveloper();
     const registrationClaim = await store.claimNextQueuedExecution({ leaseOwner: `cancel-registration-${randomUUID()}`, leaseDurationMs: 60_000 });
@@ -204,6 +231,26 @@ describe("supplied wake context persistence", () => {
       },
     });
     return (await store.admitEvent(admissionCommand("work.start", { key: id, repository: { id: 7, fullName: "acme/repo" } }))).executions[0]!.id;
+  }
+
+  async function withDelayedEffectWrite<T>(operation: "INSERT" | "UPDATE", executionId: string, callback: () => Promise<T>): Promise<T> {
+    const suffix = randomUUID().replaceAll("-", "");
+    const functionName = `delay_pr_effect_${suffix}`;
+    const triggerName = `delay_pr_effect_${suffix}`;
+    await pool.query(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.execution_id = '${executionId}'::uuid THEN PERFORM pg_sleep(0.2); END IF;
+        RETURN NEW;
+      END;
+    $$`);
+    await pool.query(`CREATE TRIGGER ${triggerName} BEFORE ${operation} ON dispatch_github_pull_request_effects
+      FOR EACH ROW EXECUTE FUNCTION ${functionName}()`);
+    try {
+      return await callback();
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS ${triggerName} ON dispatch_github_pull_request_effects`);
+      await pool.query(`DROP FUNCTION IF EXISTS ${functionName}()`);
+    }
   }
 
   async function publishReviewBinding(waitName = "developer-pr-lifecycle"): Promise<void> {
