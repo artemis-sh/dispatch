@@ -156,7 +156,7 @@ describe("supplied wake context persistence", () => {
     await expect(withDelayedEffectWrite("INSERT", insertExecutionId, () => store.registerGitHubPullRequestEffect({
       baseRef: "main", executionId: insertExecutionId, fencingToken: insertClaim.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
       registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default",
-    }))).rejects.toThrow("Execution effect capability is not current");
+    }))).rejects.toThrow("Execution effect capability expired after effect write");
     expect((await pool.query("select count(*)::int as count from dispatch_github_pull_request_effects where execution_id=$1", [insertExecutionId])).rows[0]).toEqual({ count: 0 });
 
     const updateExecutionId = await createDeveloper();
@@ -169,7 +169,7 @@ describe("supplied wake context persistence", () => {
     await expect(withDelayedEffectWrite("UPDATE", updateExecutionId, () => store.registerGitHubPullRequestEffect({
       baseRef: "main", executionId: updateExecutionId, fencingToken: updateClaim.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
       registeredAt: new Date(Date.now() + 1_000).toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default",
-    }))).rejects.toThrow("Execution effect capability is not current");
+    }))).rejects.toThrow("Execution effect capability expired after effect write");
     expect((await pool.query<{ attempted_at: Date }>("select attempted_at from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]!.attempted_at)
       .toEqual(before.attempted_at);
     await pool.query("delete from dispatch_github_pull_request_effects where id=$1", [effect.id]);

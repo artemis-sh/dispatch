@@ -1178,14 +1178,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             AND execution.state IN ('PROVISIONING','RUNNING')
             AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
           RETURNING effect.id`, [command.tenantId, existing.rows[0].id, hashCanonicalJson(command.fencingToken), new Date(command.registeredAt), command.executionId, command.fencingToken]);
-        if (!updated.rows[0]) throw new Error("Execution effect capability is not current");
-        const current = await client.query(`SELECT 1 FROM dispatch_executions execution
-          JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
-          WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
-            AND execution.state IN ('PROVISIONING','RUNNING')
-            AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()`,
-        [command.tenantId, command.executionId, command.fencingToken]);
-        if (!current.rows[0]) throw new Error("Execution effect capability is not current");
+        if (!updated.rows[0]) throw new Error("Execution effect capability expired before effect write");
+        await this.assertEffectLeaseCurrent(client, command);
         await client.query("COMMIT");
         return { created: false, id: existing.rows[0].id, state: existing.rows[0].state };
       }
@@ -1201,18 +1195,24 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         RETURNING id`,
       [id, command.tenantId, command.executionId, String(command.repositoryId), command.repositoryFullName, command.requestHash, hashCanonicalJson(command.fencingToken),
         command.pullRequestTitle, command.headRef, command.baseRef, new Date(command.registeredAt), command.fencingToken]);
-      if (!inserted.rows[0]) throw new Error("Execution effect capability is not current");
-      const current = await client.query(`SELECT 1 FROM dispatch_executions execution
-        JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
-        WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
-          AND execution.state IN ('PROVISIONING','RUNNING')
-          AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()`,
-      [command.tenantId, command.executionId, command.fencingToken]);
-      if (!current.rows[0]) throw new Error("Execution effect capability is not current");
+      if (!inserted.rows[0]) throw new Error("Execution effect capability expired before effect write");
+      await this.assertEffectLeaseCurrent(client, command);
       await client.query("COMMIT");
       githubEffects.inc({ tenant: command.tenantId, effect_type: "pull_request", result: "registered" });
       return { created: true, id, state: "REGISTERED" };
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  private async assertEffectLeaseCurrent(client: pg.PoolClient, command: {
+    executionId: string; fencingToken: string; tenantId: string;
+  }): Promise<void> {
+    const current = await client.query(`SELECT 1 FROM dispatch_executions execution
+      JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
+      WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+        AND execution.state IN ('PROVISIONING','RUNNING')
+        AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()`,
+    [command.tenantId, command.executionId, command.fencingToken]);
+    if (!current.rows[0]) throw new Error("Execution effect capability expired after effect write");
   }
 
   async listGitHubIssueLifecycles(command: { executionId: string; fencingToken: string; repositoryId: number; tenantId: string }): Promise<unknown[]> {
