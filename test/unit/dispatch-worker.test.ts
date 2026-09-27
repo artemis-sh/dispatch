@@ -168,6 +168,24 @@ describe("DispatcherWorker", () => {
     expect(fixture.provisioner.release).not.toHaveBeenCalled();
   });
 
+  it("releases a provisioned attempt that loses its lease before reaching running", async () => {
+    const controller = new AbortController();
+    const fixture = workerFixture();
+    fixture.provisioner.provision = vi.fn(async () => {
+      controller.abort();
+      return { host: "sandbox", password: "password", workloadName: "workload-1", release: provisioningInput() };
+    });
+
+    await expect(fixture.worker.runOne(controller.signal)).resolves.toBe(true);
+
+    expect(fixture.store.transitions).toEqual([]);
+    expect(fixture.runner.run).not.toHaveBeenCalled();
+    expect(fixture.provisioner.release).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, executionId: "execution-1", fencingToken: "fence-1" }),
+      expect.any(AbortSignal),
+    );
+  });
+
   it("aborts provisioning and acknowledges a heartbeat cancellation with the exact lease", async () => {
     vi.useFakeTimers();
     const fixture = workerFixture({ renew: "CANCEL_REQUESTED" });

@@ -340,10 +340,13 @@ export class DispatcherWorker {
     } finally {
       await heartbeat.stop();
       deadline.stop();
-      if (!cleanupAttempted && provisioned && !heartbeat.fenceLost && !leaseLost && (
-        !terminal
-        || provisioned.release.ttlSecondsAfterFinished === 0
-        || Date.now() >= execution.timeoutAt.getTime()
+      if (!cleanupAttempted && provisioned && (
+        !running
+        || (!heartbeat.fenceLost && !leaseLost && (
+          !terminal
+          || provisioned.release.ttlSecondsAfterFinished === 0
+          || Date.now() >= execution.timeoutAt.getTime()
+        ))
       )) {
         await releaseProvisioned();
       }
