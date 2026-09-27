@@ -1171,17 +1171,44 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       );
       if (existing.rows[0]) {
         if (existing.rows[0].request_hash !== command.requestHash) throw new IdempotencyConflictError();
-        await client.query(`UPDATE dispatch_github_pull_request_effects SET fence_hash=$3,attempted_at=$4
-          WHERE tenant_id=$1 AND id=$2`, [command.tenantId, existing.rows[0].id, hashCanonicalJson(command.fencingToken), new Date(command.registeredAt)]);
+        const updated = await client.query(`UPDATE dispatch_github_pull_request_effects effect SET fence_hash=$3,attempted_at=$4
+          FROM dispatch_executions execution
+          JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
+          WHERE effect.tenant_id=$1 AND effect.id=$2 AND execution.tenant_id=$1 AND execution.id=$5 AND attempt.fencing_token=$6
+            AND execution.state IN ('PROVISIONING','RUNNING')
+            AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
+          RETURNING effect.id`, [command.tenantId, existing.rows[0].id, hashCanonicalJson(command.fencingToken), new Date(command.registeredAt), command.executionId, command.fencingToken]);
+        if (!updated.rows[0]) throw new Error("Execution effect capability is not current");
+        const current = await client.query(`SELECT 1 FROM dispatch_executions execution
+          JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
+          WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+            AND execution.state IN ('PROVISIONING','RUNNING')
+            AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()`,
+        [command.tenantId, command.executionId, command.fencingToken]);
+        if (!current.rows[0]) throw new Error("Execution effect capability is not current");
         await client.query("COMMIT");
         return { created: false, id: existing.rows[0].id, state: existing.rows[0].state };
       }
       const id = randomUUID();
-      await client.query(`INSERT INTO dispatch_github_pull_request_effects
+      const inserted = await client.query(`INSERT INTO dispatch_github_pull_request_effects
         (id,tenant_id,execution_id,repository_id,repository_full_name,request_hash,fence_hash,pull_request_title,head_ref,base_ref,state,created_at,attempted_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REGISTERED',$11,$11)`,
+        SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REGISTERED',$11,$11
+        FROM dispatch_executions execution
+        JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
+        WHERE execution.tenant_id=$2 AND execution.id=$3 AND attempt.fencing_token=$12
+          AND execution.state IN ('PROVISIONING','RUNNING')
+          AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
+        RETURNING id`,
       [id, command.tenantId, command.executionId, String(command.repositoryId), command.repositoryFullName, command.requestHash, hashCanonicalJson(command.fencingToken),
-        command.pullRequestTitle, command.headRef, command.baseRef, new Date(command.registeredAt)]);
+        command.pullRequestTitle, command.headRef, command.baseRef, new Date(command.registeredAt), command.fencingToken]);
+      if (!inserted.rows[0]) throw new Error("Execution effect capability is not current");
+      const current = await client.query(`SELECT 1 FROM dispatch_executions execution
+        JOIN dispatch_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
+        WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+          AND execution.state IN ('PROVISIONING','RUNNING')
+          AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()`,
+      [command.tenantId, command.executionId, command.fencingToken]);
+      if (!current.rows[0]) throw new Error("Execution effect capability is not current");
       await client.query("COMMIT");
       githubEffects.inc({ tenant: command.tenantId, effect_type: "pull_request", result: "registered" });
       return { created: true, id, state: "REGISTERED" };
