@@ -114,6 +114,13 @@ describe("loadConfig", () => {
     })).toThrow(/revision resolver/i);
   });
 
+  it.each([
+    "DISPATCH_REVISION_RESOLVER_RETRY_DELAY_MS",
+    "DISPATCH_SCHEDULE_WORKER_RETRY_DELAY_MS",
+  ])("rejects an oversized %s", (name) => {
+    expect(() => loadConfig({ [name]: "8640000000000000" })).toThrow(/retry delay at most/);
+  });
+
   it("requires dispatcher renewal before lease expiry", () => {
     expect(() => loadConfig({
       DISPATCH_DISPATCHER_LEASE_DURATION_MS: "1000",

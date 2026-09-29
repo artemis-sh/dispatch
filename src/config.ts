@@ -43,6 +43,8 @@ export type Config = {
   scheduleWorkerId: string;
 };
 
+const MAX_RETRY_DELAY_MS = 2_147_483_647;
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config = {
     adminToken: emptyToUndefined(env.DISPATCH_ADMIN_TOKEN),
@@ -63,7 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     revisionResolverLeaseDurationMs: readPositiveInteger(env.DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS, 60_000),
     revisionResolverMaxAttempts: readPositiveInteger(env.DISPATCH_REVISION_RESOLVER_MAX_ATTEMPTS, 5),
     revisionResolverRequestTimeoutMs: readTimerDelay(env.DISPATCH_REVISION_RESOLVER_REQUEST_TIMEOUT_MS, 30_000),
-    revisionResolverRetryDelayMs: readNonnegativeInteger(env.DISPATCH_REVISION_RESOLVER_RETRY_DELAY_MS, 30_000),
+    revisionResolverRetryDelayMs: readRetryDelay(env.DISPATCH_REVISION_RESOLVER_RETRY_DELAY_MS, 30_000),
     revisionResolverWorkerId: env.DISPATCH_REVISION_RESOLVER_WORKER_ID ?? env.HOSTNAME ?? `dispatch-${process.pid}`,
     githubAppIdFile: emptyToUndefined(env.DISPATCH_GITHUB_APP_ID_FILE),
     githubAppPrivateKeyFile: emptyToUndefined(env.DISPATCH_GITHUB_PRIVATE_KEY_FILE),
@@ -75,7 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     scheduleWorkerEnabled: readStrictBoolean(env.DISPATCH_SCHEDULE_WORKER_ENABLED, false),
     scheduleWorkerIdlePollMs: readTimerDelay(env.DISPATCH_SCHEDULE_WORKER_IDLE_POLL_MS, 1_000),
     scheduleWorkerLeaseDurationMs: readPositiveInteger(env.DISPATCH_SCHEDULE_WORKER_LEASE_DURATION_MS, 60_000),
-    scheduleWorkerRetryDelayMs: readNonnegativeInteger(env.DISPATCH_SCHEDULE_WORKER_RETRY_DELAY_MS, 30_000),
+    scheduleWorkerRetryDelayMs: readRetryDelay(env.DISPATCH_SCHEDULE_WORKER_RETRY_DELAY_MS, 30_000),
     scheduleWorkerMaxAttempts: readPositiveInteger(env.DISPATCH_SCHEDULE_WORKER_MAX_ATTEMPTS, 5),
     scheduleWorkerMaterializeBatchSize: readPositiveInteger(env.DISPATCH_SCHEDULE_WORKER_MATERIALIZE_BATCH_SIZE, 100),
     scheduleWorkerId: env.DISPATCH_SCHEDULE_WORKER_ID ?? env.HOSTNAME ?? `dispatch-${process.pid}`,
@@ -134,6 +136,14 @@ function readPositiveInteger(value: string | undefined, fallback: number): numbe
 function readNonnegativeInteger(value: string | undefined, fallback: number): number {
   const parsed = readInteger(value, fallback);
   if (parsed < 0) throw new Error(`Expected a nonnegative integer, got ${value}`);
+  return parsed;
+}
+
+function readRetryDelay(value: string | undefined, fallback: number): number {
+  const parsed = readNonnegativeInteger(value, fallback);
+  if (parsed > MAX_RETRY_DELAY_MS) {
+    throw new Error(`Expected a retry delay at most ${MAX_RETRY_DELAY_MS}, got ${value}`);
+  }
   return parsed;
 }
 
