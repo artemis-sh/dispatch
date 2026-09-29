@@ -115,7 +115,9 @@ describe("loadConfig", () => {
   });
 
   it.each([
+    "DISPATCH_EXECUTION_RETRY_DELAY_MS",
     "DISPATCH_REVISION_RESOLVER_RETRY_DELAY_MS",
+    "DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS",
     "DISPATCH_SCHEDULE_WORKER_RETRY_DELAY_MS",
   ])("rejects an oversized %s", (name) => {
     expect(() => loadConfig({ [name]: "8640000000000000" })).toThrow(/retry delay at most/);
