@@ -27,7 +27,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@hono/node-server": "^2.1.1",
+    "@hono/node-server": "^2.1.6",
     "@hono/swagger-ui": "^0.6.1",
     "@hono/zod-openapi": "^1.6.3",
     "@kubernetes/client-node": "^2.0.0",
